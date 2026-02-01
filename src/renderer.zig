@@ -36,6 +36,8 @@ pub const RendererError = error{
     SwapChainCreationFailed,
     /// Failed to begin frame (swap chain not initialized or texture unavailable).
     BeginFrameFailed,
+    /// Failed to compile shader module.
+    ShaderCompilationFailed,
 };
 
 /// Resources needed for rendering a single frame.
@@ -72,6 +74,8 @@ pub const Renderer = struct {
     swapchain_width: u32,
     /// Current swap chain dimensions for resize detection.
     swapchain_height: u32,
+    /// Compiled WGSL shader module for triangle rendering.
+    shader_module: ?zgpu.wgpu.ShaderModule,
 
     /// Initialize the renderer.
     /// Creates a WebGPU instance and requests a high-performance adapter.
@@ -115,6 +119,16 @@ pub const Renderer = struct {
         const queue = device.getQueue();
         log.debug("WebGPU queue obtained", .{});
 
+        // Create shader module from embedded WGSL source
+        const shader_module = createShaderModule(device) orelse {
+            log.err("failed to create shader module", .{});
+            queue.release();
+            device.release();
+            adapter.release();
+            instance.release();
+            return RendererError.ShaderCompilationFailed;
+        };
+
         return Self{
             .native_instance = native_instance,
             .instance = instance,
@@ -126,6 +140,7 @@ pub const Renderer = struct {
             .window = null,
             .swapchain_width = 0,
             .swapchain_height = 0,
+            .shader_module = shader_module,
         };
     }
 
@@ -356,6 +371,39 @@ pub const Renderer = struct {
         self.swapchain_width = width;
         self.swapchain_height = height;
         log.info("swap chain recreated: {}x{}", .{ width, height });
+    }
+
+    /// Embedded WGSL shader source (compiled into the binary at build time).
+    const triangle_wgsl = @embedFile("shaders/triangle.wgsl");
+
+    /// Create a shader module from the embedded WGSL source.
+    /// Uses compile-time embedding to avoid runtime file I/O.
+    /// Returns null if shader compilation fails.
+    fn createShaderModule(device: zgpu.wgpu.Device) ?zgpu.wgpu.ShaderModule {
+        // Create the WGSL descriptor with the embedded shader source
+        var wgsl_desc: zgpu.wgpu.ShaderModuleWGSLDescriptor = .{
+            .chain = .{
+                .next = null,
+                .struct_type = .shader_module_wgsl_descriptor,
+            },
+            .code = triangle_wgsl,
+        };
+
+        // Create the shader module using the chained WGSL descriptor
+        const shader_module = device.createShaderModule(.{
+            .next_in_chain = @ptrCast(&wgsl_desc.chain),
+            .label = "Triangle Shader Module",
+        });
+
+        // Check if shader module creation succeeded
+        // A null/zero pointer indicates compilation failure
+        if (@intFromPtr(shader_module) == 0) {
+            log.err("shader module creation returned null", .{});
+            return null;
+        }
+
+        log.info("shader module created successfully", .{});
+        return shader_module;
     }
 
     /// Request a WebGPU adapter from the instance.
@@ -603,6 +651,12 @@ pub const Renderer = struct {
         // Queue is owned by the device, no separate release needed
         self.queue = null;
 
+        // Release shader module before device (it depends on the device)
+        if (self.shader_module) |shader| {
+            shader.release();
+            self.shader_module = null;
+        }
+
         // Release the device
         if (self.device) |device| {
             device.release();
@@ -640,4 +694,5 @@ test "Renderer init and deinit" {
     _ = RendererError.DeviceRequestFailed;
     _ = RendererError.SurfaceCreationFailed;
     _ = RendererError.SwapChainCreationFailed;
+    _ = RendererError.ShaderCompilationFailed;
 }
