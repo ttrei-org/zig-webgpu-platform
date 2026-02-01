@@ -277,20 +277,21 @@ pub const Renderer = struct {
             return RendererError.ShaderCompilationFailed;
         };
 
-        // Create empty pipeline layout - the current shader doesn't use uniforms.
-        // When we add screen-space coordinate transformation, we'll add the bind group layout.
+        // Create bind group layout for uniform buffer (screen dimensions).
+        // Defines the interface between Zig code and shader for screen dimensions.
+        const bind_group_layout = createBindGroupLayout(device);
+        log.debug("bind group layout created for uniforms", .{});
+
+        // Create pipeline layout with the bind group layout in slot 0.
+        // This ensures the render pipeline expects a bind group with uniform buffer at group 0.
+        const bind_group_layouts = [_]zgpu.wgpu.BindGroupLayout{bind_group_layout};
         const pipeline_layout = device.createPipelineLayout(.{
             .next_in_chain = null,
-            .label = "Empty Pipeline Layout",
-            .bind_group_layout_count = 0,
-            .bind_group_layouts = null,
+            .label = "Main Pipeline Layout",
+            .bind_group_layout_count = bind_group_layouts.len,
+            .bind_group_layouts = &bind_group_layouts,
         });
-        log.debug("empty pipeline layout created", .{});
-
-        // Create bind group layout for future uniform buffer use (screen dimensions).
-        // Not used in the current pipeline but kept for when we add coordinate transformation.
-        const bind_group_layout = createBindGroupLayout(device);
-        log.debug("bind group layout created for uniforms (for future use)", .{});
+        log.debug("pipeline layout created with bind group layout in slot 0", .{});
 
         // Create render pipeline for triangle rendering
         const render_pipeline = createRenderPipeline(device, pipeline_layout, shader_module) orelse {
