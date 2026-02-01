@@ -492,6 +492,12 @@ pub const Renderer = struct {
         // Present the swap chain to display the rendered frame
         swapchain.present();
 
+        // Tick the device to process internal Dawn work.
+        // Required on some platforms (especially Linux/Vulkan) for the
+        // compositor to receive and display the presented frame.
+        const device = self.device orelse return;
+        device.tick();
+
         log.debug("frame ended and presented", .{});
     }
 
