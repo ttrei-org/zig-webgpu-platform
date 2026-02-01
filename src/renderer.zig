@@ -255,6 +255,32 @@ pub const Renderer = struct {
         };
     }
 
+    /// Cornflower blue - a pleasant default clear color (RGB: 0.39, 0.58, 0.93).
+    pub const cornflower_blue: zgpu.wgpu.Color = .{ .r = 0.39, .g = 0.58, .b = 0.93, .a = 1.0 };
+
+    /// Begin a render pass with a clear color.
+    /// Configures the render pass descriptor with the swap chain texture view as
+    /// the color attachment, load operation set to Clear, and store operation set
+    /// to Store. This clears the screen to the specified color and prepares for drawing.
+    /// Returns a RenderPassEncoder for recording draw commands.
+    pub fn beginRenderPass(frame_state: FrameState, clear_color: zgpu.wgpu.Color) zgpu.wgpu.RenderPassEncoder {
+        const color_attachment: zgpu.wgpu.RenderPassColorAttachment = .{
+            .view = frame_state.texture_view,
+            .load_op = .clear,
+            .store_op = .store,
+            .clear_value = clear_color,
+        };
+
+        const render_pass = frame_state.command_encoder.beginRenderPass(.{
+            .label = "Main Render Pass",
+            .color_attachment_count = 1,
+            .color_attachments = @ptrCast(&color_attachment),
+        });
+
+        log.debug("render pass begun with clear color", .{});
+        return render_pass;
+    }
+
     /// Recreate the swap chain with new dimensions.
     /// Called internally when window resize is detected.
     fn recreateSwapChain(self: *Self, width: u32, height: u32) RendererError!void {

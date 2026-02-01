@@ -7,7 +7,8 @@ const zgpu = @import("zgpu");
 const zglfw = @import("zglfw");
 
 const desktop = @import("platform/desktop.zig");
-const Renderer = @import("renderer.zig").Renderer;
+const renderer_mod = @import("renderer.zig");
+const Renderer = renderer_mod.Renderer;
 
 const log = std.log.scoped(.main);
 
@@ -47,9 +48,32 @@ pub fn main() void {
     log.info("WebGPU initialization complete - adapter, device, and swap chain configured", .{});
     log.info("entering main loop", .{});
 
-    // Main loop: poll events until window close is requested
+    // Main loop: poll events and render until window close is requested
     while (!platform.shouldClose()) {
         platform.pollEvents();
+
+        // Begin frame - get swap chain texture and command encoder
+        const frame_state = renderer.beginFrame() catch |err| {
+            // Skip this frame on error (e.g., window minimized)
+            if (err != renderer_mod.RendererError.BeginFrameFailed) {
+                log.warn("beginFrame failed: {}", .{err});
+            }
+            continue;
+        };
+
+        // Begin render pass with cornflower blue clear color
+        const render_pass = Renderer.beginRenderPass(frame_state, Renderer.cornflower_blue);
+
+        // End render pass (no draw commands yet - just clearing)
+        render_pass.end();
+
+        // Submit command buffer and present frame
+        const command_buffer = frame_state.command_encoder.finish(null);
+        renderer.queue.?.submit(&[_]@TypeOf(command_buffer){command_buffer});
+        renderer.swapchain.?.present();
+
+        // Release resources for this frame
+        frame_state.texture_view.release();
     }
 
     log.info("zig-gui-experiment exiting", .{});
