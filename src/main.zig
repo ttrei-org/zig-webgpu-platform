@@ -12,6 +12,7 @@ const std = @import("std");
 const zgpu = @import("zgpu");
 const zglfw = @import("zglfw");
 
+const App = @import("app.zig").App;
 const desktop = @import("platform/desktop.zig");
 const renderer_mod = @import("renderer.zig");
 const Renderer = renderer_mod.Renderer;
@@ -78,19 +79,28 @@ pub fn main() void {
     defer renderer.deinit();
 
     log.info("WebGPU initialization complete - adapter, device, and swap chain configured", .{});
+
+    // Initialize application state
+    var app = App.init(std.heap.page_allocator);
+    defer app.deinit();
+
     log.info("entering main loop", .{});
 
     // Track if this is the first frame (for --screenshot mode)
     var first_frame_rendered = false;
 
-    // Main loop: poll events and render until window close is requested
-    while (!platform.shouldClose()) {
+    // Main loop: poll events and render until window close or app requests quit
+    while (!platform.shouldClose() and app.isRunning()) {
         platform.pollEvents();
 
         // Exit on Escape key
         if (platform.isKeyPressed(desktop.DesktopPlatform.Key.escape)) {
-            break;
+            app.requestQuit();
+            continue;
         }
+
+        // Update application state
+        app.update();
 
         // Begin frame - get swap chain texture and command encoder
         const frame_state = renderer.beginFrame() catch |err| {
