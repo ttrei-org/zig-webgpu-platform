@@ -13,6 +13,11 @@ const zgpu = @import("zgpu");
 const zglfw = @import("zglfw");
 
 const App = @import("app.zig").App;
+
+/// Frames per second cap for delta time calculation.
+/// If a frame takes longer than this, delta_time is capped to prevent
+/// large jumps in game state (e.g., when window is dragged or minimized).
+const MAX_DELTA_TIME: f32 = 0.25; // 4 FPS minimum
 const desktop = @import("platform/desktop.zig");
 const renderer_mod = @import("renderer.zig");
 const Renderer = renderer_mod.Renderer;
@@ -89,8 +94,21 @@ pub fn main() void {
     // Track if this is the first frame (for --screenshot mode)
     var first_frame_rendered = false;
 
+    // Track time for delta calculation
+    var last_time: f64 = zglfw.getTime();
+
     // Main loop: poll events and render until window close or app requests quit
     while (!platform.shouldClose() and app.isRunning()) {
+        // Calculate delta time
+        const current_time = zglfw.getTime();
+        var delta_time: f32 = @floatCast(current_time - last_time);
+        last_time = current_time;
+
+        // Cap delta time to prevent large jumps after pauses
+        if (delta_time > MAX_DELTA_TIME) {
+            delta_time = MAX_DELTA_TIME;
+        }
+
         platform.pollEvents();
 
         // Exit on Escape key
@@ -100,7 +118,7 @@ pub fn main() void {
         }
 
         // Update application state
-        app.update();
+        app.update(delta_time);
 
         // Begin frame - get swap chain texture and command encoder
         const frame_state = renderer.beginFrame() catch |err| {

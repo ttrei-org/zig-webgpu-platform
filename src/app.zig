@@ -64,7 +64,12 @@ pub const App = struct {
     /// Called once per frame to update application state.
     /// This is where game logic, animations, and state updates would occur.
     /// Currently increments the frame counter for diagnostics.
-    pub fn update(self: *Self) void {
+    ///
+    /// Parameters:
+    /// - delta_time: Time elapsed since last frame in seconds.
+    ///   Used for frame-rate independent movement and animations.
+    pub fn update(self: *Self, delta_time: f32) void {
+        _ = delta_time; // Currently unused, will be used for animations
         self.frame_count += 1;
     }
 
@@ -87,11 +92,11 @@ test "App update increments frame count" {
     var app = App.init(std.testing.allocator);
     defer app.deinit();
 
-    app.update();
+    app.update(0.016); // ~60 FPS
     try std.testing.expectEqual(@as(u64, 1), app.getFrameCount());
 
-    app.update();
-    app.update();
+    app.update(0.016);
+    app.update(0.016);
     try std.testing.expectEqual(@as(u64, 3), app.getFrameCount());
 }
 
