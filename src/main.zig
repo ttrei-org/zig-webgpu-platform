@@ -132,18 +132,8 @@ pub fn main() void {
         // Begin render pass with cornflower blue clear color
         const render_pass = Renderer.beginRenderPass(frame_state, Renderer.cornflower_blue);
 
-        // Set render pipeline - configures GPU to use our shader and vertex layout
-        render_pass.setPipeline(renderer.render_pipeline.?);
-
-        // Set bind group 0 (uniforms) - required by the pipeline layout
-        render_pass.setBindGroup(0, renderer.bind_group.?, &.{});
-
-        // Bind vertex buffer (slot 0, full buffer)
-        const vertex_buffer_size: u64 = @sizeOf(@TypeOf(renderer_mod.test_triangle_vertices));
-        render_pass.setVertexBuffer(0, renderer.vertex_buffer.?, 0, vertex_buffer_size);
-
-        // Draw the triangle (3 vertices, 1 instance)
-        render_pass.draw(3, 1, 0, 0);
+        // Let the app issue draw commands
+        app.render(&renderer, render_pass);
 
         // End render pass
         Renderer.endRenderPass(render_pass);

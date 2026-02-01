@@ -494,6 +494,51 @@ pub const Renderer = struct {
         log.debug("render pass ended", .{});
     }
 
+    /// Draw a triangle with the given vertices.
+    /// Sets up the pipeline, bind groups, and vertex buffer, then issues the draw call.
+    /// The vertices should be in screen coordinates (pixels).
+    ///
+    /// Parameters:
+    /// - render_pass: Active render pass encoder to record draw commands to.
+    /// - vertices: Array of exactly 3 vertices defining the triangle.
+    pub fn drawTriangle(self: *Self, render_pass: zgpu.wgpu.RenderPassEncoder, vertices: *const [3]Vertex) void {
+        const render_pipeline = self.render_pipeline orelse {
+            log.warn("drawTriangle: render pipeline not initialized", .{});
+            return;
+        };
+
+        const vertex_buffer = self.vertex_buffer orelse {
+            log.warn("drawTriangle: vertex buffer not initialized", .{});
+            return;
+        };
+
+        const queue = self.queue orelse {
+            log.warn("drawTriangle: queue not initialized", .{});
+            return;
+        };
+
+        // Update vertex buffer with the provided vertices.
+        // This allows the app to specify different triangles each frame.
+        queue.writeBuffer(vertex_buffer, 0, Vertex, vertices);
+
+        // Set render pipeline - configures GPU to use our shader and vertex layout
+        render_pass.setPipeline(render_pipeline);
+
+        // Set bind group 0 (uniforms) - required by the pipeline layout
+        if (self.bind_group) |bind_group| {
+            render_pass.setBindGroup(0, bind_group, &.{});
+        }
+
+        // Bind vertex buffer (slot 0, full buffer)
+        const vertex_buffer_size: u64 = @sizeOf([3]Vertex);
+        render_pass.setVertexBuffer(0, vertex_buffer, 0, vertex_buffer_size);
+
+        // Draw the triangle (3 vertices, 1 instance)
+        render_pass.draw(3, 1, 0, 0);
+
+        log.debug("triangle drawn", .{});
+    }
+
     /// End the current frame and present it to the screen.
     /// Finishes the command encoder to create a command buffer, submits it to
     /// the GPU queue, releases the texture view, and presents the swap chain.

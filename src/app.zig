@@ -8,7 +8,9 @@
 
 const std = @import("std");
 
-const Renderer = @import("renderer.zig").Renderer;
+const renderer_mod = @import("renderer.zig");
+const Renderer = renderer_mod.Renderer;
+const Vertex = renderer_mod.Vertex;
 
 const log = std.log.scoped(.app);
 
@@ -77,16 +79,26 @@ pub const App = struct {
 
     /// Called once per frame after update to issue draw commands.
     /// The application uses the renderer to draw shapes, text, and other elements.
-    /// Currently a stub - drawing logic will be moved here from main.zig.
     ///
     /// Parameters:
     /// - renderer: Pointer to the Renderer for issuing draw commands.
-    ///
-    /// Returns an error if rendering fails.
-    pub fn render(self: *Self, renderer: *Renderer) !void {
+    /// - render_pass: Active render pass encoder to record draw commands to.
+    pub fn render(self: *Self, renderer: *Renderer, render_pass: @import("zgpu").wgpu.RenderPassEncoder) void {
         _ = self;
-        _ = renderer;
-        // Drawing will be implemented here when triangle drawing is moved from main.zig
+
+        // Draw a colorful test triangle in screen coordinates.
+        // Coordinates are in pixels, origin at top-left.
+        // For a 400x300 window, this triangle is centered.
+        const triangle_vertices: [3]Vertex = .{
+            // Bottom-left: red
+            .{ .position = .{ 100.0, 225.0 }, .color = .{ 1.0, 0.0, 0.0 } },
+            // Bottom-right: green
+            .{ .position = .{ 300.0, 225.0 }, .color = .{ 0.0, 1.0, 0.0 } },
+            // Top-center: blue
+            .{ .position = .{ 200.0, 75.0 }, .color = .{ 0.0, 0.0, 1.0 } },
+        };
+
+        renderer.drawTriangle(render_pass, &triangle_vertices);
     }
 
     /// Get the current frame count.
