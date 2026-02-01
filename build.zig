@@ -25,12 +25,13 @@ pub fn build(b: *std.Build) void {
     root_module.addImport("zgpu", zgpu_module);
 
     // Fetch zglfw dependency and add import for desktop builds only
+    var zglfw_dep: ?*std.Build.Dependency = null;
     if (is_native) {
-        const zglfw_dep = b.dependency("zglfw", .{
+        zglfw_dep = b.dependency("zglfw", .{
             .target = target,
             .optimize = optimize,
         });
-        root_module.addImport("zglfw", zglfw_dep.module("root"));
+        root_module.addImport("zglfw", zglfw_dep.?.module("root"));
     }
 
     const exe = b.addExecutable(.{
@@ -56,6 +57,11 @@ pub fn build(b: *std.Build) void {
     const target_os = target.result.os.tag;
     if (target_os == .linux) {
         exe.linkSystemLibrary("X11");
+    }
+
+    // Link GLFW library for desktop builds
+    if (zglfw_dep) |dep| {
+        exe.root_module.linkLibrary(dep.artifact("glfw"));
     }
 
     // Add C source files for Dawn bindings

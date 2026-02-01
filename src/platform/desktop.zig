@@ -67,7 +67,7 @@ pub const DesktopPlatform = struct {
     /// Uses glfwCreateWindow() to create the window. The window handle is stored
     /// in the platform struct for later use in rendering and input handling.
     pub fn createWindow(self: *Self, width: u32, height: u32, title: [:0]const u8) Error!void {
-        log.debug("creating window: {}x{} \"{}\"", .{ width, height, title.ptr });
+        log.debug("creating window: {}x{} \"{s}\"", .{ width, height, title });
 
         const window = zglfw.Window.create(
             @intCast(width),
