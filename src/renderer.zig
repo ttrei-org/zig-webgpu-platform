@@ -565,6 +565,16 @@ pub const Renderer = struct {
         self.swapchain = swapchain;
         self.swapchain_width = width;
         self.swapchain_height = height;
+
+        // Update uniform buffer with new screen dimensions so shaders use correct NDC transform.
+        // Without this, the triangle would be rendered with stale dimensions after resize.
+        const queue = self.queue orelse return RendererError.SwapChainCreationFailed;
+        const uniform_buffer = self.uniform_buffer orelse return RendererError.SwapChainCreationFailed;
+        const new_uniforms: Uniforms = .{
+            .screen_size = .{ @floatFromInt(width), @floatFromInt(height) },
+        };
+        queue.writeBuffer(uniform_buffer, 0, Uniforms, &.{new_uniforms});
+
         log.info("swap chain recreated: {}x{}", .{ width, height });
     }
 
