@@ -687,11 +687,12 @@ pub const Renderer = struct {
         log.debug("frame ended and presented", .{});
     }
 
-    /// Convert triangle draw commands to vertices for GPU rendering.
-    /// Iterates through the command buffer, extracts triangles, and converts
-    /// each to 3 Vertex structs. Logs a warning if vertex buffer overflows.
+    /// Convert triangle draw commands to vertices and upload to GPU.
+    /// Iterates through the command buffer, extracts triangles, converts
+    /// each to 3 Vertex structs, and uploads to the dynamic vertex buffer
+    /// using queue.writeBuffer(). Logs a warning if vertex buffer overflows.
     ///
-    /// Returns the total number of vertices converted.
+    /// Returns the total number of vertices converted and uploaded.
     fn convertTrianglesToVertices(self: *Self) u32 {
         var vertex_count: u32 = 0;
 
@@ -706,6 +707,11 @@ pub const Renderer = struct {
         }
 
         const required_vertices = triangle_count * 3;
+
+        // Early exit if no triangles to render
+        if (required_vertices == 0) {
+            return 0;
+        }
 
         // Check for buffer overflow before processing
         if (required_vertices > self.vertex_buffer_capacity) {
@@ -746,10 +752,25 @@ pub const Renderer = struct {
 
         vertex_count = current_triangle * 3;
 
-        // Log the conversion result for debugging
-        if (current_triangle > 0) {
-            log.debug("converted {} triangles to {} vertices", .{ current_triangle, vertex_count });
-        }
+        // Upload vertex data to GPU buffer.
+        // This transfers CPU-side vertex data to GPU memory before the draw call.
+        // Done once per frame with all triangles batched for efficiency.
+        const queue = self.queue orelse {
+            log.warn("cannot upload vertices: queue not initialized", .{});
+            return 0;
+        };
+
+        const vertex_buffer = self.vertex_buffer orelse {
+            log.warn("cannot upload vertices: vertex buffer not initialized", .{});
+            return 0;
+        };
+
+        // Upload vertices to GPU buffer at offset 0.
+        // Size = vertex_count * @sizeOf(Vertex).
+        const vertex_slice = vertices[0..vertex_count];
+        queue.writeBuffer(vertex_buffer, 0, Vertex, vertex_slice);
+
+        log.debug("uploaded {} vertices ({} triangles) to GPU buffer", .{ vertex_count, current_triangle });
 
         return vertex_count;
     }
