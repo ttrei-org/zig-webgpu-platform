@@ -5,7 +5,9 @@
 //! the graphics device, command queue, and swap chain for presenting frames.
 
 const std = @import("std");
+const builtin = @import("builtin");
 const zgpu = @import("zgpu");
+const zglfw = @import("zglfw");
 
 const log = std.log.scoped(.renderer);
 
@@ -17,6 +19,10 @@ pub const RendererError = error{
     AdapterRequestFailed,
     /// Failed to obtain a WebGPU device from the adapter.
     DeviceRequestFailed,
+    /// Failed to create WebGPU surface from window.
+    SurfaceCreationFailed,
+    /// Failed to create swap chain.
+    SwapChainCreationFailed,
 };
 
 /// Renderer encapsulates all WebGPU rendering state and operations.
@@ -32,6 +38,8 @@ pub const Renderer = struct {
     device: ?zgpu.wgpu.Device,
     /// Command queue for submitting work to the GPU.
     queue: ?zgpu.wgpu.Queue,
+    /// Window surface for presenting rendered frames.
+    surface: ?zgpu.wgpu.Surface,
     /// Swap chain for presenting rendered frames to the window surface.
     swapchain: ?zgpu.wgpu.SwapChain,
 
@@ -77,8 +85,45 @@ pub const Renderer = struct {
             .adapter = adapter,
             .device = device,
             .queue = queue,
+            .surface = null,
             .swapchain = null,
         };
+    }
+
+    /// Create a swap chain from a GLFW window.
+    /// Creates a WebGPU surface from the native window handle and configures
+    /// a swap chain with BGRA8Unorm format and Fifo present mode (vsync).
+    pub fn createSwapChain(self: *Self, window: *zglfw.Window, width: u32, height: u32) RendererError!void {
+        if (self.instance == null or self.device == null) {
+            log.err("cannot create swap chain: instance or device not initialized", .{});
+            return RendererError.SwapChainCreationFailed;
+        }
+
+        // Create surface from the GLFW window (platform-specific)
+        const surface = createSurfaceFromWindow(self.instance.?, window);
+        if (surface == null) {
+            log.err("failed to create WebGPU surface from window", .{});
+            return RendererError.SurfaceCreationFailed;
+        }
+        self.surface = surface;
+        log.debug("WebGPU surface created", .{});
+
+        // Create swap chain with standard settings for 2D rendering
+        const swapchain = self.device.?.createSwapChain(
+            surface,
+            .{
+                .next_in_chain = null,
+                .label = "Main Swap Chain",
+                .usage = .{ .render_attachment = true },
+                .format = .bgra8_unorm,
+                .width = width,
+                .height = height,
+                .present_mode = .fifo, // VSync enabled
+            },
+        );
+
+        self.swapchain = swapchain;
+        log.info("WebGPU swap chain created: {}x{}", .{ width, height });
     }
 
     /// Request a WebGPU adapter from the instance.
@@ -198,15 +243,108 @@ pub const Renderer = struct {
         }
     }
 
+    /// Create a WebGPU surface from a GLFW window handle.
+    /// Handles platform-specific native window types (X11, Wayland, Win32, Cocoa).
+    fn createSurfaceFromWindow(instance: zgpu.wgpu.Instance, window: *zglfw.Window) ?zgpu.wgpu.Surface {
+        const platform = zglfw.getPlatform();
+
+        switch (platform) {
+            .x11 => {
+                const display = zglfw.getX11Display();
+                const x11_window = zglfw.getX11Window(window);
+
+                if (display == null) {
+                    log.err("failed to get X11 display", .{});
+                    return null;
+                }
+
+                var desc: zgpu.wgpu.SurfaceDescriptorFromXlibWindow = .{
+                    .chain = .{
+                        .next = null,
+                        .struct_type = .surface_descriptor_from_xlib_window,
+                    },
+                    .display = display.?,
+                    .window = x11_window,
+                };
+
+                return instance.createSurface(.{
+                    .next_in_chain = @ptrCast(&desc.chain),
+                    .label = "X11 Surface",
+                });
+            },
+            .wayland => {
+                const display = zglfw.getWaylandDisplay();
+                const wl_surface = zglfw.getWaylandWindow(window);
+
+                if (display == null or wl_surface == null) {
+                    log.err("failed to get Wayland display or surface", .{});
+                    return null;
+                }
+
+                var desc: zgpu.wgpu.SurfaceDescriptorFromWaylandSurface = .{
+                    .chain = .{
+                        .next = null,
+                        .struct_type = .surface_descriptor_from_wayland_surface,
+                    },
+                    .display = display.?,
+                    .surface = wl_surface.?,
+                };
+
+                return instance.createSurface(.{
+                    .next_in_chain = @ptrCast(&desc.chain),
+                    .label = "Wayland Surface",
+                });
+            },
+            .win32 => {
+                // Windows support - requires HWND and HINSTANCE
+                const hwnd = zglfw.getWin32Window(window);
+                if (hwnd == null) {
+                    log.err("failed to get Win32 window handle", .{});
+                    return null;
+                }
+
+                var desc: zgpu.wgpu.SurfaceDescriptorFromWindowsHWND = .{
+                    .chain = .{
+                        .next = null,
+                        .struct_type = .surface_descriptor_from_windows_hwnd,
+                    },
+                    .hinstance = std.os.windows.kernel32.GetModuleHandleW(null),
+                    .hwnd = hwnd.?,
+                };
+
+                return instance.createSurface(.{
+                    .next_in_chain = @ptrCast(&desc.chain),
+                    .label = "Win32 Surface",
+                });
+            },
+            .cocoa => {
+                // macOS support - requires NSWindow (via objc runtime)
+                // This path requires additional setup for metal layer
+                log.warn("macOS surface creation not yet implemented", .{});
+                return null;
+            },
+            else => {
+                log.err("unsupported platform for surface creation: {}", .{platform});
+                return null;
+            },
+        }
+    }
+
     /// Clean up renderer resources.
     /// Releases all WebGPU resources held by the renderer.
     pub fn deinit(self: *Self) void {
         log.debug("deinitializing renderer", .{});
 
-        // Release swap chain first as it depends on the device
+        // Release swap chain first as it depends on the surface
         if (self.swapchain) |swapchain| {
             swapchain.release();
             self.swapchain = null;
+        }
+
+        // Release surface after swap chain
+        if (self.surface) |surface| {
+            surface.release();
+            self.surface = null;
         }
 
         // Queue is owned by the device, no separate release needed
@@ -241,4 +379,6 @@ test "Renderer init and deinit" {
     _ = RendererError.InstanceCreationFailed;
     _ = RendererError.AdapterRequestFailed;
     _ = RendererError.DeviceRequestFailed;
+    _ = RendererError.SurfaceCreationFailed;
+    _ = RendererError.SwapChainCreationFailed;
 }
