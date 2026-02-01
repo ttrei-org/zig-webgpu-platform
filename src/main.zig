@@ -62,7 +62,7 @@ pub fn main() void {
     defer platform.deinit();
 
     // Create window
-    platform.createWindow(800, 600, "Zig GUI Experiment") catch |err| {
+    platform.createWindow(400, 300, "Zig GUI Experiment") catch |err| {
         log.err("failed to create window: {}", .{err});
         return;
     };
