@@ -15,6 +15,8 @@ pub const RendererError = error{
     InstanceCreationFailed,
     /// Failed to obtain a WebGPU adapter (no compatible GPU found).
     AdapterRequestFailed,
+    /// Failed to obtain a WebGPU device from the adapter.
+    DeviceRequestFailed,
 };
 
 /// Renderer encapsulates all WebGPU rendering state and operations.
@@ -56,11 +58,25 @@ pub const Renderer = struct {
         }
         log.info("WebGPU adapter obtained", .{});
 
+        // Request device with default limits (sufficient for 2D triangle rendering)
+        const device = requestDevice(adapter.?);
+        if (device == null) {
+            log.err("failed to obtain WebGPU device", .{});
+            adapter.?.release();
+            instance.?.release();
+            return RendererError.DeviceRequestFailed;
+        }
+        log.info("WebGPU device obtained", .{});
+
+        // Get the command queue from the device
+        const queue = device.?.getQueue();
+        log.debug("WebGPU queue obtained", .{});
+
         return Self{
             .instance = instance,
             .adapter = adapter,
-            .device = null,
-            .queue = null,
+            .device = device,
+            .queue = queue,
             .swapchain = null,
         };
     }
@@ -121,6 +137,67 @@ pub const Renderer = struct {
         }
     }
 
+    /// Request a WebGPU device from the adapter.
+    /// Uses default limits and features, sufficient for 2D triangle rendering.
+    /// Returns null if device creation fails.
+    fn requestDevice(adapter: zgpu.wgpu.Adapter) ?zgpu.wgpu.Device {
+        const Response = struct {
+            device: ?zgpu.wgpu.Device = null,
+            status: zgpu.wgpu.RequestDeviceStatus = .unknown,
+        };
+
+        var response: Response = .{};
+
+        // Request device with default limits - Dawn processes this synchronously
+        // on the main thread, so the callback fires before returning.
+        adapter.requestDevice(
+            .{
+                .next_in_chain = null,
+                .label = "Primary Device",
+                .required_features_count = 0,
+                .required_features = null,
+                .required_limits = null,
+                .default_queue = .{
+                    .next_in_chain = null,
+                    .label = "Default Queue",
+                },
+                .device_lost_callback = null,
+                .device_lost_user_data = null,
+            },
+            &deviceCallback,
+            @ptrCast(&response),
+        );
+
+        if (response.status != .success) {
+            log.warn("device request failed with status: {}", .{response.status});
+            return null;
+        }
+
+        return response.device;
+    }
+
+    /// Callback for device request - stores the result in the response struct.
+    fn deviceCallback(
+        status: zgpu.wgpu.RequestDeviceStatus,
+        device: zgpu.wgpu.Device,
+        message: ?[*:0]const u8,
+        userdata: ?*anyopaque,
+    ) callconv(.c) void {
+        const response: *struct {
+            device: ?zgpu.wgpu.Device,
+            status: zgpu.wgpu.RequestDeviceStatus,
+        } = @ptrCast(@alignCast(userdata));
+
+        response.status = status;
+
+        if (status == .success) {
+            response.device = device;
+        } else {
+            const msg = message orelse "unknown error";
+            log.err("device request failed: {s}", .{msg});
+        }
+    }
+
     /// Clean up renderer resources.
     /// Releases all WebGPU resources held by the renderer.
     pub fn deinit(self: *Self) void {
@@ -163,4 +240,5 @@ test "Renderer init and deinit" {
     // are properly defined instead.
     _ = RendererError.InstanceCreationFailed;
     _ = RendererError.AdapterRequestFailed;
+    _ = RendererError.DeviceRequestFailed;
 }
