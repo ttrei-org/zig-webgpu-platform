@@ -42,6 +42,30 @@ pub const RendererError = error{
     PipelineCreationFailed,
 };
 
+/// Uniform buffer data for coordinate transformation.
+/// Contains screen dimensions used by shaders to transform screen coordinates to NDC.
+///
+/// Memory layout (8 bytes total, 16-byte aligned for GPU):
+///   offset 0: screen_size[0] (f32) - width in pixels
+///   offset 4: screen_size[1] (f32) - height in pixels
+///
+/// This struct uses extern layout for predictable GPU memory mapping.
+/// The shader can use these values to convert pixel coordinates to normalized
+/// device coordinates: ndc = (pixel / screen_size) * 2.0 - 1.0
+pub const Uniforms = extern struct {
+    /// Screen dimensions in pixels (width, height).
+    screen_size: [2]f32,
+
+    // Compile-time size guarantee: 2 floats * 4 bytes = 8 bytes.
+    // Note: WebGPU requires uniform buffers to be 16-byte aligned, but the
+    // buffer itself handles alignment - this struct just needs correct size.
+    comptime {
+        if (@sizeOf(Uniforms) != 8) {
+            @compileError("Uniforms struct must be exactly 8 bytes for GPU compatibility");
+        }
+    }
+};
+
 /// GPU vertex layout for triangle rendering.
 /// Matches VertexInput in triangle.wgsl:
 ///   @location(0) position: vec2<f32>
