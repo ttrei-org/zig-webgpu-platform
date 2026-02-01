@@ -31,19 +31,15 @@ pub fn main() void {
         return;
     };
 
-    // Initialize WebGPU renderer
-    var renderer = Renderer.init() catch |err| {
+    // Initialize WebGPU renderer with the window.
+    // The renderer creates the surface before requesting the adapter to ensure
+    // the adapter is compatible with the window surface (required for X11).
+    const fb_size = platform.getFramebufferSize();
+    var renderer = Renderer.init(platform.window.?, fb_size.width, fb_size.height) catch |err| {
         log.err("failed to initialize renderer: {}", .{err});
         return;
     };
     defer renderer.deinit();
-
-    // Create swap chain from the platform window
-    const fb_size = platform.getFramebufferSize();
-    renderer.createSwapChain(platform.window.?, fb_size.width, fb_size.height) catch |err| {
-        log.err("failed to create swap chain: {}", .{err});
-        return;
-    };
 
     log.info("WebGPU initialization complete - adapter, device, and swap chain configured", .{});
     log.info("entering main loop", .{});

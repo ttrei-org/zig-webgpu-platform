@@ -181,10 +181,11 @@ pub const Renderer = struct {
     /// Updated each frame or on resize via queue.writeBuffer().
     uniform_buffer: ?zgpu.wgpu.Buffer,
 
-    /// Initialize the renderer.
-    /// Creates a WebGPU instance and requests a high-performance adapter.
-    /// Returns an error if adapter or device request fails.
-    pub fn init() RendererError!Self {
+    /// Initialize the renderer with a GLFW window.
+    /// Creates a WebGPU instance, surface, adapter (compatible with surface), device,
+    /// and swap chain. The surface must be created before the adapter to ensure
+    /// the adapter can present to the surface on all platforms (especially X11).
+    pub fn init(window: *zglfw.Window, width: u32, height: u32) RendererError!Self {
         log.debug("initializing renderer", .{});
 
         // Initialize Dawn proc table - MUST be called before any WebGPU functions
@@ -202,9 +203,20 @@ pub const Renderer = struct {
         };
         log.debug("WebGPU instance created", .{});
 
-        // Request adapter with high-performance preference
-        const adapter = requestAdapter(instance) orelse {
+        // Create surface from the GLFW window BEFORE requesting adapter.
+        // This is critical: the adapter must be requested with a compatible surface
+        // to ensure it can present to the window on all platforms (especially X11).
+        const surface = createSurfaceFromWindow(instance, window) orelse {
+            log.err("failed to create WebGPU surface from window", .{});
+            instance.release();
+            return RendererError.SurfaceCreationFailed;
+        };
+        log.debug("WebGPU surface created", .{});
+
+        // Request adapter with high-performance preference AND compatible surface
+        const adapter = requestAdapter(instance, surface) orelse {
             log.err("failed to obtain WebGPU adapter", .{});
+            surface.release();
             instance.release();
             return RendererError.AdapterRequestFailed;
         };
@@ -221,6 +233,7 @@ pub const Renderer = struct {
         const device = requestDevice(adapter) orelse {
             log.err("failed to obtain WebGPU device", .{});
             adapter.release();
+            surface.release();
             instance.release();
             return RendererError.DeviceRequestFailed;
         };
@@ -233,12 +246,29 @@ pub const Renderer = struct {
         const queue = device.getQueue();
         log.debug("WebGPU queue obtained", .{});
 
+        // Create swap chain with standard settings for 2D rendering
+        const swapchain = device.createSwapChain(
+            surface,
+            .{
+                .next_in_chain = null,
+                .label = "Main Swap Chain",
+                .usage = .{ .render_attachment = true },
+                .format = .bgra8_unorm,
+                .width = width,
+                .height = height,
+                .present_mode = .fifo, // VSync enabled
+            },
+        );
+        log.info("WebGPU swap chain created: {}x{}", .{ width, height });
+
         // Create shader module from embedded WGSL source
         const shader_module = createShaderModule(device) orelse {
             log.err("failed to create shader module", .{});
+            swapchain.release();
             queue.release();
             device.release();
             adapter.release();
+            surface.release();
             instance.release();
             return RendererError.ShaderCompilationFailed;
         };
@@ -264,9 +294,11 @@ pub const Renderer = struct {
             log.err("failed to create render pipeline", .{});
             pipeline_layout.release();
             shader_module.release();
+            swapchain.release();
             queue.release();
             device.release();
             adapter.release();
+            surface.release();
             instance.release();
             return RendererError.PipelineCreationFailed;
         };
@@ -288,11 +320,11 @@ pub const Renderer = struct {
             .adapter = adapter,
             .device = device,
             .queue = queue,
-            .surface = null,
-            .swapchain = null,
-            .window = null,
-            .swapchain_width = 0,
-            .swapchain_height = 0,
+            .surface = surface,
+            .swapchain = swapchain,
+            .window = window,
+            .swapchain_width = width,
+            .swapchain_height = height,
             .shader_module = shader_module,
             .bind_group_layout = bind_group_layout,
             .pipeline_layout = pipeline_layout,
@@ -300,45 +332,6 @@ pub const Renderer = struct {
             .vertex_buffer = vertex_buffer,
             .uniform_buffer = uniform_buffer,
         };
-    }
-
-    /// Create a swap chain from a GLFW window.
-    /// Creates a WebGPU surface from the native window handle and configures
-    /// a swap chain with BGRA8Unorm format and Fifo present mode (vsync).
-    pub fn createSwapChain(self: *Self, window: *zglfw.Window, width: u32, height: u32) RendererError!void {
-        if (self.instance == null or self.device == null) {
-            log.err("cannot create swap chain: instance or device not initialized", .{});
-            return RendererError.SwapChainCreationFailed;
-        }
-
-        // Create surface from the GLFW window (platform-specific)
-        const surface = createSurfaceFromWindow(self.instance.?, window);
-        if (surface == null) {
-            log.err("failed to create WebGPU surface from window", .{});
-            return RendererError.SurfaceCreationFailed;
-        }
-        self.surface = surface;
-        log.debug("WebGPU surface created", .{});
-
-        // Create swap chain with standard settings for 2D rendering
-        const swapchain = self.device.?.createSwapChain(
-            surface,
-            .{
-                .next_in_chain = null,
-                .label = "Main Swap Chain",
-                .usage = .{ .render_attachment = true },
-                .format = .bgra8_unorm,
-                .width = width,
-                .height = height,
-                .present_mode = .fifo, // VSync enabled
-            },
-        );
-
-        self.swapchain = swapchain;
-        self.window = window;
-        self.swapchain_width = width;
-        self.swapchain_height = height;
-        log.info("WebGPU swap chain created: {}x{}", .{ width, height });
     }
 
     /// Begin a new frame for rendering.
@@ -738,8 +731,9 @@ pub const Renderer = struct {
 
     /// Request a WebGPU adapter from the instance.
     /// Prefers high-performance GPU and uses the default backend.
+    /// The surface parameter ensures the adapter can present to the window.
     /// Returns null if no suitable adapter is available.
-    fn requestAdapter(instance: zgpu.wgpu.Instance) ?zgpu.wgpu.Adapter {
+    fn requestAdapter(instance: zgpu.wgpu.Instance, surface: zgpu.wgpu.Surface) ?zgpu.wgpu.Adapter {
         const Response = struct {
             adapter: ?zgpu.wgpu.Adapter = null,
             status: zgpu.wgpu.RequestAdapterStatus = .unknown,
@@ -749,10 +743,11 @@ pub const Renderer = struct {
 
         // Request adapter asynchronously - Dawn processes this synchronously
         // on the main thread, so the callback fires before returning.
+        // The compatible_surface ensures the adapter can present to our window.
         instance.requestAdapter(
             .{
                 .next_in_chain = null,
-                .compatible_surface = null,
+                .compatible_surface = surface,
                 .power_preference = .high_performance,
                 .backend_type = .undef, // Let Dawn choose the best backend
                 .force_fallback_adapter = false,
