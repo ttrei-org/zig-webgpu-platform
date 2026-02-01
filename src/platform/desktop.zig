@@ -12,6 +12,8 @@ const log = std.log.scoped(.desktop_platform);
 pub const Error = error{
     /// GLFW initialization failed.
     GlfwInitFailed,
+    /// Window creation failed.
+    WindowCreationFailed,
 };
 
 /// Desktop platform using GLFW for window management and input handling.
@@ -62,13 +64,24 @@ pub const DesktopPlatform = struct {
     }
 
     /// Create a new window with the specified dimensions and title.
-    pub fn createWindow(self: *Self, width: u32, height: u32, title: [:0]const u8) !void {
-        _ = self;
-        _ = width;
-        _ = height;
-        _ = title;
-        // Placeholder: GLFW window creation will be implemented in bd-2lk
-        log.debug("createWindow placeholder called", .{});
+    /// Uses glfwCreateWindow() to create the window. The window handle is stored
+    /// in the platform struct for later use in rendering and input handling.
+    pub fn createWindow(self: *Self, width: u32, height: u32, title: [:0]const u8) Error!void {
+        log.debug("creating window: {}x{} \"{}\"", .{ width, height, title.ptr });
+
+        const window = zglfw.Window.create(
+            @intCast(width),
+            @intCast(height),
+            title,
+            null,
+            null,
+        ) catch |err| {
+            log.err("failed to create GLFW window: {}", .{err});
+            return Error.WindowCreationFailed;
+        };
+
+        self.window = window;
+        log.info("window created successfully: {}x{}", .{ width, height });
     }
 
     /// Poll for pending events and process them.
