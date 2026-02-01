@@ -281,6 +281,15 @@ pub const Renderer = struct {
         return render_pass;
     }
 
+    /// End a render pass.
+    /// Completes the recording of render commands for this pass. After calling this,
+    /// the render pass encoder is consumed and cannot be used again.
+    /// Drawing commands should be recorded between beginRenderPass and endRenderPass.
+    pub fn endRenderPass(render_pass: zgpu.wgpu.RenderPassEncoder) void {
+        render_pass.end();
+        log.debug("render pass ended", .{});
+    }
+
     /// Recreate the swap chain with new dimensions.
     /// Called internally when window resize is detected.
     fn recreateSwapChain(self: *Self, width: u32, height: u32) RendererError!void {

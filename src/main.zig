@@ -65,7 +65,7 @@ pub fn main() void {
         const render_pass = Renderer.beginRenderPass(frame_state, Renderer.cornflower_blue);
 
         // End render pass (no draw commands yet - just clearing)
-        render_pass.end();
+        Renderer.endRenderPass(render_pass);
 
         // Submit command buffer and present frame
         const command_buffer = frame_state.command_encoder.finish(null);
