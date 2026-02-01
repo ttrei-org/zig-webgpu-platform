@@ -71,7 +71,10 @@ pub fn main() void {
         const vertex_buffer_size: u64 = @sizeOf(@TypeOf(renderer_mod.test_triangle_vertices));
         render_pass.setVertexBuffer(0, renderer.vertex_buffer.?, 0, vertex_buffer_size);
 
-        // End render pass (no draw commands yet - just clearing)
+        // Draw the triangle (3 vertices, 1 instance)
+        render_pass.draw(3, 1, 0, 0);
+
+        // End render pass
         Renderer.endRenderPass(render_pass);
 
         // End frame: submit command buffer and present swap chain
