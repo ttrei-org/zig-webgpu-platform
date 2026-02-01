@@ -642,8 +642,8 @@ pub const Renderer = struct {
     }
 
     /// End the current frame and present it to the screen.
-    /// Finishes the command encoder to create a command buffer, submits it to
-    /// the GPU queue, releases the texture view, and presents the swap chain.
+    /// Processes queued draw commands, finishes the command encoder to create
+    /// a command buffer, submits it to the GPU queue, and presents the swap chain.
     /// Call this once at the end of each frame after all drawing is complete.
     pub fn endFrame(self: *Self, frame_state: FrameState) void {
         const queue = self.queue orelse {
@@ -655,6 +655,24 @@ pub const Renderer = struct {
             log.err("cannot end frame: swap chain not initialized", .{});
             return;
         };
+
+        // Process queued draw commands before GPU submission.
+        // Iterate through the command buffer and handle each command type.
+        // Triangle commands will be collected for batched vertex buffer upload.
+        var triangle_count: u32 = 0;
+        for (self.command_buffer.items) |command| {
+            switch (command) {
+                .triangle => |_| {
+                    // Count triangles for future batched rendering.
+                    // Actual vertex conversion will be implemented in a subsequent task.
+                    triangle_count += 1;
+                },
+            }
+        }
+
+        if (triangle_count > 0) {
+            log.debug("processed {} triangle commands", .{triangle_count});
+        }
 
         // Finish the command encoder to create a command buffer
         const command_buffer = frame_state.command_encoder.finish(.{
