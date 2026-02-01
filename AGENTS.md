@@ -158,7 +158,7 @@ git status              # Check what changed
 git add <files>         # Stage code changes
 br sync --flush-only    # Export beads changes to JSONL
 git commit -m "..."     # Commit everything
-git push                # Push to remote
+git push                # Push to remote (only if there is a remote defined)
 ```
 
 ### Best Practices
