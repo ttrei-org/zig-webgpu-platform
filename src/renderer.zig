@@ -163,8 +163,12 @@ pub const Renderer = struct {
     swapchain_height: u32,
     /// Compiled WGSL shader module for triangle rendering.
     shader_module: ?zgpu.wgpu.ShaderModule,
+    /// Bind group layout describing the uniform buffer binding.
+    /// Defines the interface between Zig code and shader for screen dimensions.
+    /// Layout: binding 0, visibility VERTEX, buffer type Uniform.
+    bind_group_layout: ?zgpu.wgpu.BindGroupLayout,
     /// Pipeline layout defining resource bindings for the render pipeline.
-    /// Currently empty (no bind group layouts) - uniform buffer added later.
+    /// Contains bind_group_layout for uniform buffer access in shaders.
     pipeline_layout: ?zgpu.wgpu.PipelineLayout,
     /// Render pipeline for triangle rendering.
     /// Combines shader stages, vertex layout, and output format configuration.
@@ -229,16 +233,21 @@ pub const Renderer = struct {
             return RendererError.ShaderCompilationFailed;
         };
 
-        // Create empty pipeline layout (no bind group layouts yet).
-        // This defines what resources the pipeline can access. An empty layout
-        // means no external resources (uniforms, textures) - those will be added later.
+        // Create bind group layout describing the uniform buffer binding.
+        // This layout defines the interface between Zig code and shader for screen dimensions.
+        const bind_group_layout = createBindGroupLayout(device);
+        log.debug("bind group layout created for uniforms", .{});
+
+        // Create pipeline layout with the bind group layout.
+        // This defines what resources the pipeline can access.
+        const bind_group_layouts = [_]zgpu.wgpu.BindGroupLayout{bind_group_layout};
         const pipeline_layout = device.createPipelineLayout(.{
             .next_in_chain = null,
-            .label = "Empty Pipeline Layout",
-            .bind_group_layout_count = 0,
-            .bind_group_layouts = null,
+            .label = "Uniforms Pipeline Layout",
+            .bind_group_layout_count = bind_group_layouts.len,
+            .bind_group_layouts = &bind_group_layouts,
         });
-        log.debug("empty pipeline layout created", .{});
+        log.debug("pipeline layout created with uniform bind group", .{});
 
         // Create render pipeline for triangle rendering
         const render_pipeline = createRenderPipeline(device, pipeline_layout, shader_module) orelse {
@@ -275,6 +284,7 @@ pub const Renderer = struct {
             .swapchain_width = 0,
             .swapchain_height = 0,
             .shader_module = shader_module,
+            .bind_group_layout = bind_group_layout,
             .pipeline_layout = pipeline_layout,
             .render_pipeline = render_pipeline,
             .vertex_buffer = vertex_buffer,
@@ -665,6 +675,51 @@ pub const Renderer = struct {
         return buffer;
     }
 
+    /// Create a bind group layout describing the uniform buffer binding.
+    /// Configures: binding 0, visibility VERTEX (used in vertex shader), buffer type Uniform.
+    /// This layout is used both to create the bind group and to define the pipeline layout.
+    /// The layout defines the interface between Zig code and shader for screen dimensions.
+    fn createBindGroupLayout(device: zgpu.wgpu.Device) zgpu.wgpu.BindGroupLayout {
+        // Define the uniform buffer binding entry.
+        // Binding 0: screen dimensions uniform buffer, visible to vertex shader.
+        const layout_entries = [_]zgpu.wgpu.BindGroupLayoutEntry{
+            .{
+                .next_in_chain = null,
+                .binding = 0, // @group(0) @binding(0) in WGSL
+                .visibility = .{ .vertex = true, .fragment = false, .compute = false, ._padding = 0 },
+                .buffer = .{
+                    .next_in_chain = null,
+                    .binding_type = .uniform,
+                    .has_dynamic_offset = .false,
+                    .min_binding_size = @sizeOf(Uniforms), // 8 bytes
+                },
+                // Not using sampler, texture, or storage_texture - set to defaults
+                .sampler = .{ .next_in_chain = null, .binding_type = .undef },
+                .texture = .{
+                    .next_in_chain = null,
+                    .sample_type = .undef,
+                    .view_dimension = .undef,
+                    .multisampled = false,
+                },
+                .storage_texture = .{
+                    .next_in_chain = null,
+                    .access = .undef,
+                    .format = .undef,
+                    .view_dimension = .undef,
+                },
+            },
+        };
+
+        const layout = device.createBindGroupLayout(.{
+            .next_in_chain = null,
+            .label = "Uniforms Bind Group Layout",
+            .entry_count = layout_entries.len,
+            .entries = &layout_entries,
+        });
+
+        return layout;
+    }
+
     /// Request a WebGPU adapter from the instance.
     /// Prefers high-performance GPU and uses the default backend.
     /// Returns null if no suitable adapter is available.
@@ -938,6 +993,12 @@ pub const Renderer = struct {
         if (self.pipeline_layout) |layout| {
             layout.release();
             self.pipeline_layout = null;
+        }
+
+        // Release bind group layout before device (it depends on the device)
+        if (self.bind_group_layout) |layout| {
+            layout.release();
+            self.bind_group_layout = null;
         }
 
         // Release the device
