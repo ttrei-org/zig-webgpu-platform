@@ -180,6 +180,10 @@ pub const Renderer = struct {
     /// Holds the Uniforms struct (8 bytes data, 16 bytes allocated for GPU alignment).
     /// Updated each frame or on resize via queue.writeBuffer().
     uniform_buffer: ?zgpu.wgpu.Buffer,
+    /// Bind group containing the uniform buffer binding.
+    /// Makes the uniform data (screen dimensions) available to the shader during rendering.
+    /// Set during render pass to connect the uniform buffer to shader binding 0.
+    bind_group: ?zgpu.wgpu.BindGroup,
 
     /// Initialize the renderer with a GLFW window.
     /// Creates a WebGPU instance, surface, adapter (compatible with surface), device,
@@ -313,6 +317,11 @@ pub const Renderer = struct {
         const uniform_buffer = createUniformBuffer(device);
         log.info("uniform buffer created for screen dimensions", .{});
 
+        // Create bind group containing the uniform buffer.
+        // This connects the uniform buffer to binding 0 in the shader.
+        const bind_group = createBindGroup(device, bind_group_layout, uniform_buffer);
+        log.info("bind group created with uniform buffer", .{});
+
         return Self{
             .native_instance = native_instance,
             .instance = instance,
@@ -330,6 +339,7 @@ pub const Renderer = struct {
             .render_pipeline = render_pipeline,
             .vertex_buffer = vertex_buffer,
             .uniform_buffer = uniform_buffer,
+            .bind_group = bind_group,
         };
     }
 
@@ -728,6 +738,39 @@ pub const Renderer = struct {
         return layout;
     }
 
+    /// Create a bind group containing the uniform buffer.
+    /// Binds the uniform buffer at binding 0 with offset 0 and full size.
+    /// The bind group is set during rendering to make uniform data available to shaders.
+    fn createBindGroup(
+        device: zgpu.wgpu.Device,
+        layout: zgpu.wgpu.BindGroupLayout,
+        uniform_buffer: zgpu.wgpu.Buffer,
+    ) zgpu.wgpu.BindGroup {
+        // Define the binding entry for the uniform buffer.
+        // Binding 0 with offset 0 and size covering the full uniform buffer.
+        const entries = [_]zgpu.wgpu.BindGroupEntry{
+            .{
+                .next_in_chain = null,
+                .binding = 0, // @group(0) @binding(0) in WGSL
+                .buffer = uniform_buffer,
+                .offset = 0,
+                .size = uniform_buffer_size, // 16 bytes (aligned size)
+                .sampler = null,
+                .texture_view = null,
+            },
+        };
+
+        const bind_group = device.createBindGroup(.{
+            .next_in_chain = null,
+            .label = "Uniforms Bind Group",
+            .layout = layout,
+            .entry_count = entries.len,
+            .entries = &entries,
+        });
+
+        return bind_group;
+    }
+
     /// Request a WebGPU adapter from the instance.
     /// Prefers high-performance GPU and uses the default backend.
     /// The surface parameter ensures the adapter can present to the window.
@@ -1007,6 +1050,12 @@ pub const Renderer = struct {
         if (self.uniform_buffer) |buffer| {
             buffer.release();
             self.uniform_buffer = null;
+        }
+
+        // Release bind group before bind group layout (it depends on the layout)
+        if (self.bind_group) |bg| {
+            bg.release();
+            self.bind_group = null;
         }
 
         // Release pipeline layout before device (it depends on the device)
