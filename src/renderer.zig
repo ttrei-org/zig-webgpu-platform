@@ -172,6 +172,10 @@ pub const Renderer = struct {
     /// Vertex buffer containing triangle vertex data.
     /// Holds 3 vertices (60 bytes) for the test triangle.
     vertex_buffer: ?zgpu.wgpu.Buffer,
+    /// Uniform buffer for screen dimensions.
+    /// Holds the Uniforms struct (8 bytes data, 16 bytes allocated for GPU alignment).
+    /// Updated each frame or on resize via queue.writeBuffer().
+    uniform_buffer: ?zgpu.wgpu.Buffer,
 
     /// Initialize the renderer.
     /// Creates a WebGPU instance and requests a high-performance adapter.
@@ -253,6 +257,12 @@ pub const Renderer = struct {
         const vertex_buffer = createVertexBuffer(device);
         log.info("vertex buffer created with triangle data", .{});
 
+        // Create uniform buffer for screen dimensions.
+        // WebGPU requires uniform buffers to be 16-byte aligned, so we allocate 16 bytes
+        // even though Uniforms is only 8 bytes.
+        const uniform_buffer = createUniformBuffer(device);
+        log.info("uniform buffer created for screen dimensions", .{});
+
         return Self{
             .native_instance = native_instance,
             .instance = instance,
@@ -268,6 +278,7 @@ pub const Renderer = struct {
             .pipeline_layout = pipeline_layout,
             .render_pipeline = render_pipeline,
             .vertex_buffer = vertex_buffer,
+            .uniform_buffer = uniform_buffer,
         };
     }
 
@@ -633,6 +644,27 @@ pub const Renderer = struct {
         return buffer;
     }
 
+    /// Minimum uniform buffer size for WebGPU alignment.
+    /// WebGPU requires uniform buffers to be 16-byte aligned. Since Uniforms is 8 bytes,
+    /// we allocate 16 bytes to satisfy alignment requirements.
+    const uniform_buffer_size: u64 = 16;
+
+    /// Create a uniform buffer for screen dimensions.
+    /// The buffer is created with UNIFORM | COPY_DST usage to allow:
+    /// - Binding as a uniform buffer in shaders (UNIFORM)
+    /// - Updating via queue.writeBuffer() each frame or on resize (COPY_DST)
+    fn createUniformBuffer(device: zgpu.wgpu.Device) zgpu.wgpu.Buffer {
+        const buffer = device.createBuffer(.{
+            .next_in_chain = null,
+            .label = "Screen Dimensions Uniform Buffer",
+            .usage = .{ .uniform = true, .copy_dst = true },
+            .size = uniform_buffer_size,
+            .mapped_at_creation = .false,
+        });
+
+        return buffer;
+    }
+
     /// Request a WebGPU adapter from the instance.
     /// Prefers high-performance GPU and uses the default backend.
     /// Returns null if no suitable adapter is available.
@@ -894,6 +926,12 @@ pub const Renderer = struct {
         if (self.vertex_buffer) |buffer| {
             buffer.release();
             self.vertex_buffer = null;
+        }
+
+        // Release uniform buffer before device (it depends on the device)
+        if (self.uniform_buffer) |buffer| {
+            buffer.release();
+            self.uniform_buffer = null;
         }
 
         // Release pipeline layout before device (it depends on the device)
