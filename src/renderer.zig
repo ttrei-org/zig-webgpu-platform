@@ -66,6 +66,19 @@ pub const Vertex = extern struct {
     }
 };
 
+/// Hardcoded test triangle vertices in NDC (Normalized Device Coordinates).
+/// Positions range from -1 to +1 on both axes, with (0,0) at center.
+/// Each vertex has a distinct color (red, green, blue) to verify
+/// that vertex attribute interpolation works correctly in the fragment shader.
+pub const test_triangle_vertices = [_]Vertex{
+    // Bottom-left: red
+    .{ .position = .{ -0.5, -0.5 }, .color = .{ 1.0, 0.0, 0.0 } },
+    // Bottom-right: green
+    .{ .position = .{ 0.5, -0.5 }, .color = .{ 0.0, 1.0, 0.0 } },
+    // Top-center: blue
+    .{ .position = .{ 0.0, 0.5 }, .color = .{ 0.0, 0.0, 1.0 } },
+};
+
 /// Vertex attributes describing position and color shader inputs.
 /// Position at location 0, color at location 1.
 const vertex_attributes = [_]zgpu.wgpu.VertexAttribute{
