@@ -208,7 +208,14 @@ pub const Renderer = struct {
             instance.release();
             return RendererError.AdapterRequestFailed;
         };
-        log.info("WebGPU adapter obtained", .{});
+
+        // Log adapter properties for debugging - helps identify GPU backend issues
+        var props: zgpu.wgpu.AdapterProperties = undefined;
+        props.next_in_chain = null;
+        adapter.getProperties(&props);
+        log.info("WebGPU adapter: {s} ({s})", .{ props.name, props.driver_description });
+        log.info("  Backend: {}, Type: {}", .{ props.backend_type, props.adapter_type });
+        log.info("  Vendor: {s} (0x{x}), Device ID: 0x{x}", .{ props.vendor_name, props.vendor_id, props.device_id });
 
         // Request device with default limits (sufficient for 2D triangle rendering)
         const device = requestDevice(adapter) orelse {
