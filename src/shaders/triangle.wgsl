@@ -3,19 +3,32 @@
 // This shader handles vertex transformation and fragment coloring for triangles.
 // It is designed to work with the Renderer module in the zig-gui-experiment project.
 //
-// The shader expects vertices with position in Normalized Device Coordinates (NDC)
-// and color attributes. Positions are passed through directly since they're already
-// in clip space coordinates.
+// The shader expects vertices with position in screen coordinates (pixels) and
+// color attributes. The vertex shader transforms screen coordinates to NDC using
+// the screen dimensions from a uniform buffer.
 //
-// NDC coordinate system:
+// Screen coordinate system (input):
+// - Origin at top-left of screen
+// - X: 0 (left) to screen_width (right)
+// - Y: 0 (top) to screen_height (bottom)
+//
+// NDC coordinate system (output):
 // - Origin at center of screen
 // - X: -1 (left) to +1 (right)
 // - Y: -1 (bottom) to +1 (top)
 
+// Uniform buffer containing screen dimensions for coordinate transformation.
+// Matches the Uniforms struct in renderer.zig.
+struct Uniforms {
+    screen_size: vec2<f32>,  // Screen dimensions in pixels (width, height)
+}
+
+@group(0) @binding(0) var<uniform> uniforms: Uniforms;
+
 // Vertex input structure - defines the per-vertex attributes
 // This will be populated from vertex buffers bound during rendering
 struct VertexInput {
-    @location(0) position: vec2<f32>,  // 2D position in NDC (range [-1, 1])
+    @location(0) position: vec2<f32>,  // 2D position in screen coordinates (pixels)
     @location(1) color: vec3<f32>,     // RGB vertex color for interpolation
 }
 
@@ -27,14 +40,19 @@ struct VertexOutput {
 }
 
 // Vertex shader entry point
-// Passes through NDC positions directly (already in clip space)
+// Transforms screen coordinates to NDC using uniform screen dimensions
 @vertex
 fn vs_main(input: VertexInput) -> VertexOutput {
     var output: VertexOutput;
     
+    // Transform screen coordinates (pixels) to NDC (normalized device coordinates).
+    // Screen coords: origin top-left, X right, Y down, range [0, screen_size]
+    // NDC: origin center, X right, Y up, range [-1, 1]
+    let ndc_x = (input.position.x / uniforms.screen_size.x) * 2.0 - 1.0;
+    let ndc_y = 1.0 - (input.position.y / uniforms.screen_size.y) * 2.0;
+    
     // Convert 2D NDC position to 4D clip-space (z=0, w=1 for 2D rendering)
-    // Position is already in NDC so no transformation needed
-    output.position = vec4<f32>(input.position, 0.0, 1.0);
+    output.position = vec4<f32>(ndc_x, ndc_y, 0.0, 1.0);
     
     // Pass vertex color through for interpolation across the triangle
     output.color = input.color;

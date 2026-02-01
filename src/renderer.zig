@@ -93,17 +93,18 @@ pub const Vertex = extern struct {
     }
 };
 
-/// Hardcoded test triangle vertices in NDC (Normalized Device Coordinates).
-/// Positions range from -1 to +1 on both axes, with (0,0) at center.
+/// Hardcoded test triangle vertices in screen coordinates (pixels).
+/// Screen coordinate system: origin at top-left, X increases right, Y increases down.
+/// For a 400x300 window, this triangle is centered and covers roughly 1/4 of the screen.
 /// Each vertex has a distinct color (red, green, blue) to verify
 /// that vertex attribute interpolation works correctly in the fragment shader.
 pub const test_triangle_vertices = [_]Vertex{
-    // Bottom-left: red
-    .{ .position = .{ -0.5, -0.5 }, .color = .{ 1.0, 0.0, 0.0 } },
-    // Bottom-right: green
-    .{ .position = .{ 0.5, -0.5 }, .color = .{ 0.0, 1.0, 0.0 } },
-    // Top-center: blue
-    .{ .position = .{ 0.0, 0.5 }, .color = .{ 0.0, 0.0, 1.0 } },
+    // Bottom-left: red (100px from left, 225px from top)
+    .{ .position = .{ 100.0, 225.0 }, .color = .{ 1.0, 0.0, 0.0 } },
+    // Bottom-right: green (300px from left, 225px from top)
+    .{ .position = .{ 300.0, 225.0 }, .color = .{ 0.0, 1.0, 0.0 } },
+    // Top-center: blue (200px from left, 75px from top)
+    .{ .position = .{ 200.0, 75.0 }, .color = .{ 0.0, 0.0, 1.0 } },
 };
 
 /// Vertex attributes describing position and color shader inputs.
@@ -331,6 +332,14 @@ pub const Renderer = struct {
         // even though Uniforms is only 8 bytes.
         const uniform_buffer = createUniformBuffer(device);
         log.info("uniform buffer created for screen dimensions", .{});
+
+        // Initialize uniform buffer with current screen dimensions.
+        // The shader needs these values to transform screen coordinates to NDC.
+        const initial_uniforms: Uniforms = .{
+            .screen_size = .{ @floatFromInt(width), @floatFromInt(height) },
+        };
+        queue.writeBuffer(uniform_buffer, 0, Uniforms, &.{initial_uniforms});
+        log.info("uniform buffer initialized with screen size: {}x{}", .{ width, height });
 
         // Create bind group containing the uniform buffer.
         // This connects the uniform buffer to binding 0 in the shader.
