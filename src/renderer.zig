@@ -11,6 +11,17 @@ const zglfw = @import("zglfw");
 
 const log = std.log.scoped(.renderer);
 
+// Dawn native instance - opaque pointer to C++ dawn::native::Instance
+const DawnNativeInstance = ?*opaque {};
+const DawnProcsTable = ?*anyopaque;
+
+// External C functions from dawn.cpp and dawn_proc.c
+extern fn dniCreate() DawnNativeInstance;
+extern fn dniDestroy(dni: DawnNativeInstance) void;
+extern fn dniGetWgpuInstance(dni: DawnNativeInstance) ?zgpu.wgpu.Instance;
+extern fn dnGetProcs() DawnProcsTable;
+extern fn dawnProcSetProcs(procs: DawnProcsTable) void;
+
 /// Error type for renderer operations.
 pub const RendererError = error{
     /// Failed to create WebGPU instance.
@@ -30,6 +41,8 @@ pub const RendererError = error{
 pub const Renderer = struct {
     const Self = @This();
 
+    /// Dawn native instance - must be kept alive for WebGPU to function.
+    native_instance: DawnNativeInstance,
     /// WebGPU instance handle - entry point for the WebGPU API.
     instance: ?zgpu.wgpu.Instance,
     /// WebGPU adapter representing a physical GPU.
@@ -49,9 +62,19 @@ pub const Renderer = struct {
     pub fn init() RendererError!Self {
         log.debug("initializing renderer", .{});
 
-        // Create WebGPU instance - the entry point for WebGPU API
-        // Dawn always returns a valid instance, no null check needed.
-        const instance = zgpu.wgpu.createInstance(.{ .next_in_chain = null });
+        // Initialize Dawn proc table - MUST be called before any WebGPU functions
+        dawnProcSetProcs(dnGetProcs());
+        log.debug("Dawn proc table initialized", .{});
+
+        // Create Dawn native instance (C++ object that manages WebGPU backend)
+        const native_instance = dniCreate();
+        errdefer dniDestroy(native_instance);
+
+        // Get WebGPU instance from Dawn native instance
+        const instance = dniGetWgpuInstance(native_instance) orelse {
+            log.err("failed to get WebGPU instance from Dawn", .{});
+            return RendererError.InstanceCreationFailed;
+        };
         log.debug("WebGPU instance created", .{});
 
         // Request adapter with high-performance preference
@@ -76,6 +99,7 @@ pub const Renderer = struct {
         log.debug("WebGPU queue obtained", .{});
 
         return Self{
+            .native_instance = native_instance,
             .instance = instance,
             .adapter = adapter,
             .device = device,
@@ -382,6 +406,12 @@ pub const Renderer = struct {
         if (self.instance) |instance| {
             instance.release();
             self.instance = null;
+        }
+
+        // Destroy Dawn native instance (C++ cleanup)
+        if (self.native_instance) |ni| {
+            dniDestroy(ni);
+            self.native_instance = null;
         }
 
         log.info("renderer resources released", .{});
