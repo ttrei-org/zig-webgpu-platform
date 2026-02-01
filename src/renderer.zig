@@ -66,6 +66,12 @@ pub const Renderer = struct {
     surface: ?zgpu.wgpu.Surface,
     /// Swap chain for presenting rendered frames to the window surface.
     swapchain: ?zgpu.wgpu.SwapChain,
+    /// Window reference for resize detection.
+    window: ?*zglfw.Window,
+    /// Current swap chain dimensions for resize detection.
+    swapchain_width: u32,
+    /// Current swap chain dimensions for resize detection.
+    swapchain_height: u32,
 
     /// Initialize the renderer.
     /// Creates a WebGPU instance and requests a high-performance adapter.
@@ -117,6 +123,9 @@ pub const Renderer = struct {
             .queue = queue,
             .surface = null,
             .swapchain = null,
+            .window = null,
+            .swapchain_width = 0,
+            .swapchain_height = 0,
         };
     }
 
@@ -153,26 +162,84 @@ pub const Renderer = struct {
         );
 
         self.swapchain = swapchain;
+        self.window = window;
+        self.swapchain_width = width;
+        self.swapchain_height = height;
         log.info("WebGPU swap chain created: {}x{}", .{ width, height });
     }
 
     /// Begin a new frame for rendering.
     /// Gets the current swap chain texture view and creates a command encoder.
     /// Call this once at the start of each frame before recording render commands.
+    /// Handles swap chain recreation if the window has been resized.
     /// Returns FrameState containing the texture view and command encoder.
     pub fn beginFrame(self: *Self) RendererError!FrameState {
-        const swapchain = self.swapchain orelse {
-            log.err("cannot begin frame: swap chain not initialized", .{});
-            return RendererError.BeginFrameFailed;
-        };
-
         const device = self.device orelse {
             log.err("cannot begin frame: device not initialized", .{});
             return RendererError.BeginFrameFailed;
         };
 
-        // Get the texture view from the swap chain for this frame
+        const window = self.window orelse {
+            log.err("cannot begin frame: window not set", .{});
+            return RendererError.BeginFrameFailed;
+        };
+
+        // Check if window was resized and recreate swap chain if needed
+        const fb_size = window.getFramebufferSize();
+        const current_width: u32 = @intCast(fb_size[0]);
+        const current_height: u32 = @intCast(fb_size[1]);
+
+        if (current_width != self.swapchain_width or current_height != self.swapchain_height) {
+            // Window was resized - need to recreate swap chain
+            if (current_width > 0 and current_height > 0) {
+                log.info("window resized: {}x{} -> {}x{}, recreating swap chain", .{
+                    self.swapchain_width, self.swapchain_height, current_width, current_height,
+                });
+                try self.recreateSwapChain(current_width, current_height);
+            } else {
+                // Window is minimized (zero size) - skip this frame
+                log.debug("window minimized, skipping frame", .{});
+                return RendererError.BeginFrameFailed;
+            }
+        }
+
+        const swapchain = self.swapchain orelse {
+            log.err("cannot begin frame: swap chain not initialized", .{});
+            return RendererError.BeginFrameFailed;
+        };
+
+        // Get the texture view from the swap chain for this frame.
+        // Dawn's getCurrentTextureView can return null (as address 0) if the
+        // swap chain is invalid. We check for this by inspecting the pointer address.
         const texture_view = swapchain.getCurrentTextureView();
+        if (@intFromPtr(texture_view) == 0) {
+            log.warn("swap chain returned null texture view, attempting recreation", .{});
+            try self.recreateSwapChain(current_width, current_height);
+
+            // Try again after recreation
+            const new_swapchain = self.swapchain orelse {
+                log.err("swap chain recreation failed", .{});
+                return RendererError.BeginFrameFailed;
+            };
+            const new_texture_view = new_swapchain.getCurrentTextureView();
+            if (@intFromPtr(new_texture_view) == 0) {
+                log.err("swap chain still returning null texture view after recreation", .{});
+                return RendererError.BeginFrameFailed;
+            }
+
+            // Create command encoder with the new texture view
+            const command_encoder = device.createCommandEncoder(.{
+                .next_in_chain = null,
+                .label = "Frame Command Encoder",
+            });
+
+            log.debug("frame begun (after swap chain recreation)", .{});
+
+            return FrameState{
+                .texture_view = new_texture_view,
+                .command_encoder = command_encoder,
+            };
+        }
 
         // Create a command encoder for recording GPU commands this frame
         const command_encoder = device.createCommandEncoder(.{
@@ -186,6 +253,42 @@ pub const Renderer = struct {
             .texture_view = texture_view,
             .command_encoder = command_encoder,
         };
+    }
+
+    /// Recreate the swap chain with new dimensions.
+    /// Called internally when window resize is detected.
+    fn recreateSwapChain(self: *Self, width: u32, height: u32) RendererError!void {
+        const device = self.device orelse {
+            return RendererError.SwapChainCreationFailed;
+        };
+
+        const surface = self.surface orelse {
+            return RendererError.SwapChainCreationFailed;
+        };
+
+        // Release old swap chain
+        if (self.swapchain) |old_swapchain| {
+            old_swapchain.release();
+        }
+
+        // Create new swap chain with updated dimensions
+        const swapchain = device.createSwapChain(
+            surface,
+            .{
+                .next_in_chain = null,
+                .label = "Main Swap Chain",
+                .usage = .{ .render_attachment = true },
+                .format = .bgra8_unorm,
+                .width = width,
+                .height = height,
+                .present_mode = .fifo, // VSync enabled
+            },
+        );
+
+        self.swapchain = swapchain;
+        self.swapchain_width = width;
+        self.swapchain_height = height;
+        log.info("swap chain recreated: {}x{}", .{ width, height });
     }
 
     /// Request a WebGPU adapter from the instance.
