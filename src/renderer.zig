@@ -145,6 +145,9 @@ pub const Renderer = struct {
     /// Render pipeline for triangle rendering.
     /// Combines shader stages, vertex layout, and output format configuration.
     render_pipeline: ?zgpu.wgpu.RenderPipeline,
+    /// Vertex buffer containing triangle vertex data.
+    /// Holds 3 vertices (60 bytes) for the test triangle.
+    vertex_buffer: ?zgpu.wgpu.Buffer,
 
     /// Initialize the renderer.
     /// Creates a WebGPU instance and requests a high-performance adapter.
@@ -221,6 +224,11 @@ pub const Renderer = struct {
             return RendererError.PipelineCreationFailed;
         };
 
+        // Create vertex buffer with triangle data using mappedAtCreation for upload.
+        // Size = 3 vertices * 20 bytes per vertex = 60 bytes.
+        const vertex_buffer = createVertexBuffer(device);
+        log.info("vertex buffer created with triangle data", .{});
+
         return Self{
             .native_instance = native_instance,
             .instance = instance,
@@ -235,6 +243,7 @@ pub const Renderer = struct {
             .shader_module = shader_module,
             .pipeline_layout = pipeline_layout,
             .render_pipeline = render_pipeline,
+            .vertex_buffer = vertex_buffer,
         };
     }
 
@@ -568,6 +577,38 @@ pub const Renderer = struct {
         return pipeline;
     }
 
+    /// Create a vertex buffer containing the test triangle data.
+    /// Uses mappedAtCreation for efficient data upload at buffer creation time.
+    /// The buffer is unmapped after copying data, making it ready for GPU use.
+    fn createVertexBuffer(device: zgpu.wgpu.Device) zgpu.wgpu.Buffer {
+        const vertex_data = &test_triangle_vertices;
+        const buffer_size: u64 = @sizeOf(@TypeOf(vertex_data.*));
+
+        // Create buffer with mappedAtCreation for immediate data upload.
+        // Usage: VERTEX (for binding as vertex buffer) | COPY_DST (for potential future updates).
+        const buffer = device.createBuffer(.{
+            .next_in_chain = null,
+            .label = "Triangle Vertex Buffer",
+            .usage = .{ .vertex = true, .copy_dst = true },
+            .size = buffer_size,
+            .mapped_at_creation = .true,
+        });
+
+        // Get the mapped memory range and copy vertex data into it.
+        // getMappedRange returns a slice we can directly write to.
+        const mapped = buffer.getMappedRange(Vertex, 0, vertex_data.len);
+        if (mapped) |dst| {
+            @memcpy(dst, vertex_data);
+        } else {
+            log.err("failed to get mapped range for vertex buffer", .{});
+        }
+
+        // Unmap the buffer - data is now on the GPU and buffer is ready for rendering.
+        buffer.unmap();
+
+        return buffer;
+    }
+
     /// Request a WebGPU adapter from the instance.
     /// Prefers high-performance GPU and uses the default backend.
     /// Returns null if no suitable adapter is available.
@@ -823,6 +864,12 @@ pub const Renderer = struct {
         if (self.render_pipeline) |pipeline| {
             pipeline.release();
             self.render_pipeline = null;
+        }
+
+        // Release vertex buffer before device (it depends on the device)
+        if (self.vertex_buffer) |buffer| {
+            buffer.release();
+            self.vertex_buffer = null;
         }
 
         // Release pipeline layout before device (it depends on the device)
