@@ -45,39 +45,34 @@ pub const Renderer = struct {
 
     /// Initialize the renderer.
     /// Creates a WebGPU instance and requests a high-performance adapter.
-    /// Returns an error if instance creation or adapter request fails.
+    /// Returns an error if adapter or device request fails.
     pub fn init() RendererError!Self {
         log.debug("initializing renderer", .{});
 
         // Create WebGPU instance - the entry point for WebGPU API
+        // Dawn always returns a valid instance, no null check needed.
         const instance = zgpu.wgpu.createInstance(.{ .next_in_chain = null });
-        if (instance == null) {
-            log.err("failed to create WebGPU instance", .{});
-            return RendererError.InstanceCreationFailed;
-        }
         log.debug("WebGPU instance created", .{});
 
         // Request adapter with high-performance preference
-        const adapter = requestAdapter(instance.?);
-        if (adapter == null) {
+        const adapter = requestAdapter(instance) orelse {
             log.err("failed to obtain WebGPU adapter", .{});
-            instance.?.release();
+            instance.release();
             return RendererError.AdapterRequestFailed;
-        }
+        };
         log.info("WebGPU adapter obtained", .{});
 
         // Request device with default limits (sufficient for 2D triangle rendering)
-        const device = requestDevice(adapter.?);
-        if (device == null) {
+        const device = requestDevice(adapter) orelse {
             log.err("failed to obtain WebGPU device", .{});
-            adapter.?.release();
-            instance.?.release();
+            adapter.release();
+            instance.release();
             return RendererError.DeviceRequestFailed;
-        }
+        };
         log.info("WebGPU device obtained", .{});
 
         // Get the command queue from the device
-        const queue = device.?.getQueue();
+        const queue = device.getQueue();
         log.debug("WebGPU queue obtained", .{});
 
         return Self{
@@ -246,88 +241,109 @@ pub const Renderer = struct {
     /// Create a WebGPU surface from a GLFW window handle.
     /// Handles platform-specific native window types (X11, Wayland, Win32, Cocoa).
     fn createSurfaceFromWindow(instance: zgpu.wgpu.Instance, window: *zglfw.Window) ?zgpu.wgpu.Surface {
-        const platform = zglfw.getPlatform();
+        const native_os = builtin.os.tag;
 
-        switch (platform) {
-            .x11 => {
-                const display = zglfw.getX11Display();
-                const x11_window = zglfw.getX11Window(window);
-
-                if (display == null) {
-                    log.err("failed to get X11 display", .{});
-                    return null;
-                }
-
-                var desc: zgpu.wgpu.SurfaceDescriptorFromXlibWindow = .{
-                    .chain = .{
-                        .next = null,
-                        .struct_type = .surface_descriptor_from_xlib_window,
-                    },
-                    .display = display.?,
-                    .window = x11_window,
-                };
-
-                return instance.createSurface(.{
-                    .next_in_chain = @ptrCast(&desc.chain),
-                    .label = "X11 Surface",
-                });
-            },
-            .wayland => {
-                const display = zglfw.getWaylandDisplay();
-                const wl_surface = zglfw.getWaylandWindow(window);
-
-                if (display == null or wl_surface == null) {
-                    log.err("failed to get Wayland display or surface", .{});
-                    return null;
-                }
-
-                var desc: zgpu.wgpu.SurfaceDescriptorFromWaylandSurface = .{
-                    .chain = .{
-                        .next = null,
-                        .struct_type = .surface_descriptor_from_wayland_surface,
-                    },
-                    .display = display.?,
-                    .surface = wl_surface.?,
-                };
-
-                return instance.createSurface(.{
-                    .next_in_chain = @ptrCast(&desc.chain),
-                    .label = "Wayland Surface",
-                });
-            },
-            .win32 => {
-                // Windows support - requires HWND and HINSTANCE
-                const hwnd = zglfw.getWin32Window(window);
-                if (hwnd == null) {
-                    log.err("failed to get Win32 window handle", .{});
-                    return null;
-                }
-
-                var desc: zgpu.wgpu.SurfaceDescriptorFromWindowsHWND = .{
-                    .chain = .{
-                        .next = null,
-                        .struct_type = .surface_descriptor_from_windows_hwnd,
-                    },
-                    .hinstance = std.os.windows.kernel32.GetModuleHandleW(null),
-                    .hwnd = hwnd.?,
-                };
-
-                return instance.createSurface(.{
-                    .next_in_chain = @ptrCast(&desc.chain),
-                    .label = "Win32 Surface",
-                });
-            },
-            .cocoa => {
-                // macOS support - requires NSWindow (via objc runtime)
-                // This path requires additional setup for metal layer
-                log.warn("macOS surface creation not yet implemented", .{});
-                return null;
-            },
-            else => {
-                log.err("unsupported platform for surface creation: {}", .{platform});
-                return null;
-            },
+        // Use compile-time OS detection to avoid referencing unavailable symbols
+        if (native_os == .windows) {
+            return createWin32Surface(instance, window);
+        } else if (native_os == .macos) {
+            log.warn("macOS surface creation not yet implemented", .{});
+            return null;
+        } else {
+            // Linux - check runtime platform (X11 vs Wayland)
+            const platform = zglfw.getPlatform();
+            return switch (platform) {
+                .x11 => createX11Surface(instance, window),
+                .wayland => createWaylandSurface(instance, window),
+                else => blk: {
+                    log.err("unsupported platform for surface creation: {}", .{platform});
+                    break :blk null;
+                },
+            };
         }
+    }
+
+    /// Create X11 surface (Linux only)
+    fn createX11Surface(instance: zgpu.wgpu.Instance, window: *zglfw.Window) ?zgpu.wgpu.Surface {
+        const display = zglfw.getX11Display();
+        const x11_window = zglfw.getX11Window(window);
+
+        if (display == null) {
+            log.err("failed to get X11 display", .{});
+            return null;
+        }
+
+        var desc: zgpu.wgpu.SurfaceDescriptorFromXlibWindow = .{
+            .chain = .{
+                .next = null,
+                .struct_type = .surface_descriptor_from_xlib_window,
+            },
+            .display = display.?,
+            .window = x11_window,
+        };
+
+        return instance.createSurface(.{
+            .next_in_chain = @ptrCast(&desc.chain),
+            .label = "X11 Surface",
+        });
+    }
+
+    /// Create Wayland surface (Linux only)
+    fn createWaylandSurface(instance: zgpu.wgpu.Instance, window: *zglfw.Window) ?zgpu.wgpu.Surface {
+        const display = zglfw.getWaylandDisplay();
+        const wl_surface = zglfw.getWaylandWindow(window);
+
+        if (display == null or wl_surface == null) {
+            log.err("failed to get Wayland display or surface", .{});
+            return null;
+        }
+
+        var desc: zgpu.wgpu.SurfaceDescriptorFromWaylandSurface = .{
+            .chain = .{
+                .next = null,
+                .struct_type = .surface_descriptor_from_wayland_surface,
+            },
+            .display = display.?,
+            .surface = wl_surface.?,
+        };
+
+        return instance.createSurface(.{
+            .next_in_chain = @ptrCast(&desc.chain),
+            .label = "Wayland Surface",
+        });
+    }
+
+    /// Create Win32 surface (Windows only)
+    fn createWin32Surface(instance: zgpu.wgpu.Instance, window: *zglfw.Window) ?zgpu.wgpu.Surface {
+        if (builtin.os.tag != .windows) {
+            @compileError("createWin32Surface should only be called on Windows");
+        }
+
+        const hwnd = zglfw.getWin32Window(window);
+        if (hwnd == null) {
+            log.err("failed to get Win32 window handle", .{});
+            return null;
+        }
+
+        const hinstance = std.os.windows.kernel32.GetModuleHandleW(null);
+        if (hinstance == null) {
+            log.err("failed to get module handle", .{});
+            return null;
+        }
+
+        var desc: zgpu.wgpu.SurfaceDescriptorFromWindowsHWND = .{
+            .chain = .{
+                .next = null,
+                .struct_type = .surface_descriptor_from_windows_hwnd,
+            },
+            .hinstance = hinstance.?,
+            .hwnd = hwnd.?,
+        };
+
+        return instance.createSurface(.{
+            .next_in_chain = @ptrCast(&desc.chain),
+            .label = "Win32 Surface",
+        });
     }
 
     /// Clean up renderer resources.

@@ -7,6 +7,7 @@ const zgpu = @import("zgpu");
 const zglfw = @import("zglfw");
 
 const desktop = @import("platform/desktop.zig");
+const Renderer = @import("renderer.zig").Renderer;
 
 const log = std.log.scoped(.main);
 
@@ -29,6 +30,21 @@ pub fn main() void {
         return;
     };
 
+    // Initialize WebGPU renderer
+    var renderer = Renderer.init() catch |err| {
+        log.err("failed to initialize renderer: {}", .{err});
+        return;
+    };
+    defer renderer.deinit();
+
+    // Create swap chain from the platform window
+    const fb_size = platform.getFramebufferSize();
+    renderer.createSwapChain(platform.window.?, fb_size.width, fb_size.height) catch |err| {
+        log.err("failed to create swap chain: {}", .{err});
+        return;
+    };
+
+    log.info("WebGPU initialization complete - adapter, device, and swap chain configured", .{});
     log.info("entering main loop", .{});
 
     // Main loop: poll events until window close is requested
