@@ -290,6 +290,38 @@ pub const Renderer = struct {
         log.debug("render pass ended", .{});
     }
 
+    /// End the current frame and present it to the screen.
+    /// Finishes the command encoder to create a command buffer, submits it to
+    /// the GPU queue, releases the texture view, and presents the swap chain.
+    /// Call this once at the end of each frame after all drawing is complete.
+    pub fn endFrame(self: *Self, frame_state: FrameState) void {
+        const queue = self.queue orelse {
+            log.err("cannot end frame: queue not initialized", .{});
+            return;
+        };
+
+        const swapchain = self.swapchain orelse {
+            log.err("cannot end frame: swap chain not initialized", .{});
+            return;
+        };
+
+        // Finish the command encoder to create a command buffer
+        const command_buffer = frame_state.command_encoder.finish(.{
+            .label = "Frame Command Buffer",
+        });
+
+        // Submit the command buffer to the GPU queue
+        queue.submit(&[_]zgpu.wgpu.CommandBuffer{command_buffer});
+
+        // Release the texture view (no longer needed after submission)
+        frame_state.texture_view.release();
+
+        // Present the swap chain to display the rendered frame
+        swapchain.present();
+
+        log.debug("frame ended and presented", .{});
+    }
+
     /// Recreate the swap chain with new dimensions.
     /// Called internally when window resize is detected.
     fn recreateSwapChain(self: *Self, width: u32, height: u32) RendererError!void {
