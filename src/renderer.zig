@@ -116,6 +116,9 @@ pub const Renderer = struct {
     swapchain_height: u32,
     /// Compiled WGSL shader module for triangle rendering.
     shader_module: ?zgpu.wgpu.ShaderModule,
+    /// Pipeline layout defining resource bindings for the render pipeline.
+    /// Currently empty (no bind group layouts) - uniform buffer added later.
+    pipeline_layout: ?zgpu.wgpu.PipelineLayout,
 
     /// Initialize the renderer.
     /// Creates a WebGPU instance and requests a high-performance adapter.
@@ -169,6 +172,17 @@ pub const Renderer = struct {
             return RendererError.ShaderCompilationFailed;
         };
 
+        // Create empty pipeline layout (no bind group layouts yet).
+        // This defines what resources the pipeline can access. An empty layout
+        // means no external resources (uniforms, textures) - those will be added later.
+        const pipeline_layout = device.createPipelineLayout(.{
+            .next_in_chain = null,
+            .label = "Empty Pipeline Layout",
+            .bind_group_layout_count = 0,
+            .bind_group_layouts = null,
+        });
+        log.debug("empty pipeline layout created", .{});
+
         return Self{
             .native_instance = native_instance,
             .instance = instance,
@@ -181,6 +195,7 @@ pub const Renderer = struct {
             .swapchain_width = 0,
             .swapchain_height = 0,
             .shader_module = shader_module,
+            .pipeline_layout = pipeline_layout,
         };
     }
 
@@ -695,6 +710,12 @@ pub const Renderer = struct {
         if (self.shader_module) |shader| {
             shader.release();
             self.shader_module = null;
+        }
+
+        // Release pipeline layout before device (it depends on the device)
+        if (self.pipeline_layout) |layout| {
+            layout.release();
+            self.pipeline_layout = null;
         }
 
         // Release the device
