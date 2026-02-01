@@ -657,21 +657,11 @@ pub const Renderer = struct {
         };
 
         // Process queued draw commands before GPU submission.
-        // Iterate through the command buffer and handle each command type.
-        // Triangle commands will be collected for batched vertex buffer upload.
-        var triangle_count: u32 = 0;
-        for (self.command_buffer.items) |command| {
-            switch (command) {
-                .triangle => |_| {
-                    // Count triangles for future batched rendering.
-                    // Actual vertex conversion will be implemented in a subsequent task.
-                    triangle_count += 1;
-                },
-            }
-        }
+        // Convert triangle commands to vertices for batched rendering.
+        const vertex_count = self.convertTrianglesToVertices();
 
-        if (triangle_count > 0) {
-            log.debug("processed {} triangle commands", .{triangle_count});
+        if (vertex_count > 0) {
+            log.debug("converted {} vertices from triangle commands", .{vertex_count});
         }
 
         // Finish the command encoder to create a command buffer
@@ -695,6 +685,73 @@ pub const Renderer = struct {
         device.tick();
 
         log.debug("frame ended and presented", .{});
+    }
+
+    /// Convert triangle draw commands to vertices for GPU rendering.
+    /// Iterates through the command buffer, extracts triangles, and converts
+    /// each to 3 Vertex structs. Logs a warning if vertex buffer overflows.
+    ///
+    /// Returns the total number of vertices converted.
+    fn convertTrianglesToVertices(self: *Self) u32 {
+        var vertex_count: u32 = 0;
+
+        // First pass: count total vertices needed to detect overflow early
+        var triangle_count: u32 = 0;
+        for (self.command_buffer.items) |command| {
+            switch (command) {
+                .triangle => {
+                    triangle_count += 1;
+                },
+            }
+        }
+
+        const required_vertices = triangle_count * 3;
+
+        // Check for buffer overflow before processing
+        if (required_vertices > self.vertex_buffer_capacity) {
+            log.warn("vertex buffer overflow: {} vertices required, {} capacity. Truncating to {} triangles.", .{
+                required_vertices,
+                self.vertex_buffer_capacity,
+                self.vertex_buffer_capacity / 3,
+            });
+        }
+
+        // Build temporary vertex array from triangle commands.
+        // Use stack allocation for small batches, respecting buffer capacity.
+        const max_vertices = @min(required_vertices, self.vertex_buffer_capacity);
+        const max_triangles = max_vertices / 3;
+
+        // Stack-allocated array for vertices (up to capacity limit).
+        // This avoids heap allocation for the common case.
+        var vertices: [max_vertex_capacity]Vertex = undefined;
+        var current_triangle: u32 = 0;
+
+        for (self.command_buffer.items) |command| {
+            switch (command) {
+                .triangle => |triangle| {
+                    // Stop if we've reached capacity
+                    if (current_triangle >= max_triangles) break;
+
+                    // Convert Triangle to 3 Vertex structs
+                    const tri_vertices = triangle.toVertices();
+                    const base_idx = current_triangle * 3;
+                    vertices[base_idx + 0] = tri_vertices[0];
+                    vertices[base_idx + 1] = tri_vertices[1];
+                    vertices[base_idx + 2] = tri_vertices[2];
+
+                    current_triangle += 1;
+                },
+            }
+        }
+
+        vertex_count = current_triangle * 3;
+
+        // Log the conversion result for debugging
+        if (current_triangle > 0) {
+            log.debug("converted {} triangles to {} vertices", .{ current_triangle, vertex_count });
+        }
+
+        return vertex_count;
     }
 
     /// Recreate the swap chain with new dimensions.
