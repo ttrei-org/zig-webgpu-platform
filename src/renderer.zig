@@ -93,6 +93,67 @@ pub const Vertex = extern struct {
     }
 };
 
+/// RGB color type for vertex coloring.
+/// Values are normalized floats in range [0.0, 1.0].
+pub const Color = [3]f32;
+
+/// A triangle draw command containing three vertices with positions and colors.
+/// Positions are in screen coordinates (pixels), origin at top-left.
+/// Colors are interpolated across the triangle surface by the GPU.
+///
+/// This struct is used as a variant in DrawCommand and captures all data
+/// needed to render a single triangle.
+pub const Triangle = struct {
+    /// Three vertex positions in screen coordinates (x, y in pixels).
+    positions: [3][2]f32,
+    /// Color at each vertex for gradient interpolation.
+    colors: [3]Color,
+
+    /// Create a Triangle from an array of Vertex structs.
+    /// Convenience function for converting between representations.
+    pub fn fromVertices(vertices: [3]Vertex) Triangle {
+        return .{
+            .positions = .{
+                vertices[0].position,
+                vertices[1].position,
+                vertices[2].position,
+            },
+            .colors = .{
+                vertices[0].color,
+                vertices[1].color,
+                vertices[2].color,
+            },
+        };
+    }
+
+    /// Convert back to an array of Vertex structs for GPU rendering.
+    pub fn toVertices(self: Triangle) [3]Vertex {
+        return .{
+            .{ .position = self.positions[0], .color = self.colors[0] },
+            .{ .position = self.positions[1], .color = self.colors[1] },
+            .{ .position = self.positions[2], .color = self.colors[2] },
+        };
+    }
+};
+
+/// Tagged union for draw commands.
+/// Allows storing heterogeneous draw commands in a single list for batched processing.
+/// Currently supports triangles; extensible to other primitives (lines, rectangles, circles).
+///
+/// Design rationale:
+/// - Tagged union enables type-safe command storage without dynamic dispatch
+/// - Batch processing improves GPU utilization by reducing state changes
+/// - New primitive types can be added as additional union variants
+pub const DrawCommand = union(enum) {
+    /// A triangle primitive with three colored vertices.
+    triangle: Triangle,
+
+    // Future primitives will be added here as the rendering system evolves:
+    // line: Line,
+    // rectangle: Rectangle,
+    // circle: Circle,
+};
+
 /// Hardcoded test triangle vertices in screen coordinates (pixels).
 /// Screen coordinate system: origin at top-left, X increases right, Y increases down.
 /// For a 400x300 window, this triangle is centered and covers roughly 1/4 of the screen.
