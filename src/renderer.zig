@@ -206,6 +206,12 @@ pub const FrameState = struct {
 pub const Renderer = struct {
     const Self = @This();
 
+    /// Allocator used for command buffer and other dynamic allocations.
+    allocator: std.mem.Allocator,
+    /// Command buffer accumulating draw commands during App.render.
+    /// Processed during endFrame to generate GPU draw calls.
+    command_buffer: std.ArrayList(DrawCommand),
+
     /// Dawn native instance - must be kept alive for WebGPU to function.
     native_instance: DawnNativeInstance,
     /// WebGPU instance handle - entry point for the WebGPU API.
@@ -265,7 +271,7 @@ pub const Renderer = struct {
     /// Creates a WebGPU instance, surface, adapter (compatible with surface), device,
     /// and swap chain. The surface must be created before the adapter to ensure
     /// the adapter can present to the surface on all platforms (especially X11).
-    pub fn init(window: *zglfw.Window, width: u32, height: u32) RendererError!Self {
+    pub fn init(allocator: std.mem.Allocator, window: *zglfw.Window, width: u32, height: u32) RendererError!Self {
         log.debug("initializing renderer", .{});
 
         // Initialize Dawn proc table - MUST be called before any WebGPU functions
@@ -408,6 +414,8 @@ pub const Renderer = struct {
         log.info("bind group created with uniform buffer", .{});
 
         return Self{
+            .allocator = allocator,
+            .command_buffer = .empty,
             .native_instance = native_instance,
             .instance = instance,
             .adapter = adapter,
@@ -1466,6 +1474,9 @@ pub const Renderer = struct {
     /// Releases all WebGPU resources held by the renderer.
     pub fn deinit(self: *Self) void {
         log.debug("deinitializing renderer", .{});
+
+        // Free command buffer first (uses allocator, not GPU resources)
+        self.command_buffer.deinit(self.allocator);
 
         // Release swap chain first as it depends on the surface
         if (self.swapchain) |swapchain| {

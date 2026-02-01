@@ -77,7 +77,7 @@ pub fn main() void {
     // The renderer creates the surface before requesting the adapter to ensure
     // the adapter is compatible with the window surface (required for X11).
     const fb_size = platform.getFramebufferSize();
-    var renderer = Renderer.init(platform.window.?, fb_size.width, fb_size.height) catch |err| {
+    var renderer = Renderer.init(std.heap.page_allocator, platform.window.?, fb_size.width, fb_size.height) catch |err| {
         log.err("failed to initialize renderer: {}", .{err});
         return;
     };
