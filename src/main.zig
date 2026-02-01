@@ -64,6 +64,9 @@ pub fn main() void {
         // Begin render pass with cornflower blue clear color
         const render_pass = Renderer.beginRenderPass(frame_state, Renderer.cornflower_blue);
 
+        // Set render pipeline - configures GPU to use our shader and vertex layout
+        render_pass.setPipeline(renderer.render_pipeline.?);
+
         // End render pass (no draw commands yet - just clearing)
         Renderer.endRenderPass(render_pass);
 
