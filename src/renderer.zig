@@ -219,6 +219,9 @@ pub const Renderer = struct {
         };
         log.info("WebGPU device obtained", .{});
 
+        // Set up error callback to catch validation errors
+        device.setUncapturedErrorCallback(&deviceErrorCallback, null);
+
         // Get the command queue from the device
         const queue = device.getQueue();
         log.debug("WebGPU queue obtained", .{});
@@ -813,6 +816,16 @@ pub const Renderer = struct {
         }
 
         return response.device;
+    }
+
+    /// Error callback for WebGPU validation errors.
+    fn deviceErrorCallback(
+        err_type: zgpu.wgpu.ErrorType,
+        message: ?[*:0]const u8,
+        _: ?*anyopaque,
+    ) callconv(.c) void {
+        const msg = message orelse "unknown error";
+        log.err("WebGPU error ({}): {s}", .{ err_type, msg });
     }
 
     /// Callback for device request - stores the result in the response struct.
