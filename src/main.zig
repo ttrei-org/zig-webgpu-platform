@@ -67,6 +67,10 @@ pub fn main() void {
         // Set render pipeline - configures GPU to use our shader and vertex layout
         render_pass.setPipeline(renderer.render_pipeline.?);
 
+        // Bind vertex buffer (slot 0, full buffer)
+        const vertex_buffer_size: u64 = @sizeOf(@TypeOf(renderer_mod.test_triangle_vertices));
+        render_pass.setVertexBuffer(0, renderer.vertex_buffer.?, 0, vertex_buffer_size);
+
         // End render pass (no draw commands yet - just clearing)
         Renderer.endRenderPass(render_pass);
 
