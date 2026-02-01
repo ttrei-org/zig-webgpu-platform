@@ -8,6 +8,8 @@
 
 const std = @import("std");
 
+const Renderer = @import("renderer.zig").Renderer;
+
 const log = std.log.scoped(.app);
 
 /// Application state container.
@@ -71,6 +73,20 @@ pub const App = struct {
     pub fn update(self: *Self, delta_time: f32) void {
         _ = delta_time; // Currently unused, will be used for animations
         self.frame_count += 1;
+    }
+
+    /// Called once per frame after update to issue draw commands.
+    /// The application uses the renderer to draw shapes, text, and other elements.
+    /// Currently a stub - drawing logic will be moved here from main.zig.
+    ///
+    /// Parameters:
+    /// - renderer: Pointer to the Renderer for issuing draw commands.
+    ///
+    /// Returns an error if rendering fails.
+    pub fn render(self: *Self, renderer: *Renderer) !void {
+        _ = self;
+        _ = renderer;
+        // Drawing will be implemented here when triangle drawing is moved from main.zig
     }
 
     /// Get the current frame count.
