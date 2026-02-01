@@ -1,5 +1,14 @@
 # AGENTS.md
 
+## Project-specific instructions
+
+Take screenshots during development to verify the output is correct:
+```bash
+xvfb-run zig build run -- --screenshot=/tmp/screenshot.png
+```
+
+---
+
 ## Zig Development
 
 Always use `zigdoc` to discover APIs for the Zig standard library and any third-party dependencies.
