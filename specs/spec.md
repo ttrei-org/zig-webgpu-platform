@@ -2,10 +2,9 @@
 
 ## Overview
 
-A lightweight 2D vector graphics framework in Zig using WebGPU, targeting:
+A lightweight 2D graphics framework in Zig using WebGPU, targeting:
 - **Desktop:** Linux, Windows (native via Dawn)
 - **Web:** Browsers with WebGPU support (Chrome, Edge, Firefox nightly)
-- **Mobile:** Android/iOS via web browser
 
 ## Architecture
 
@@ -21,6 +20,7 @@ A lightweight 2D vector graphics framework in Zig using WebGPU, targeting:
 
 - **zgpu** - WebGPU bindings + Dawn integration
 - **zglfw** - Window creation and input (desktop only)
+- **zigimg** or **stb_image_write** - PNG export for headless mode
 
 ### Project Structure
 
@@ -28,62 +28,88 @@ A lightweight 2D vector graphics framework in Zig using WebGPU, targeting:
 ├── build.zig
 ├── build.zig.zon
 ├── src/
-│   ├── main.zig          # Entry point, platform dispatch
-│   ├── app.zig           # Platform-agnostic game logic
-│   ├── renderer.zig      # WebGPU 2D rendering primitives
+│   ├── main.zig          # Entry point, CLI parsing, platform dispatch
+│   ├── app.zig           # Platform-agnostic application logic
+│   ├── renderer.zig      # WebGPU rendering, draw commands, screenshot API
+│   ├── platform.zig      # Platform interface definition
 │   └── platform/
-│       ├── desktop.zig   # GLFW window + input handling
-│       └── web.zig       # Emscripten bindings
+│       ├── desktop.zig   # GLFW window + mouse input
+│       ├── web.zig       # Emscripten bindings
+│       └── headless.zig  # Offscreen rendering without window
 ├── shaders/
-│   └── vector2d.wgsl     # Shader for 2D vector rendering
+│   └── triangle.wgsl     # Shader for triangle rendering
+├── web/
+│   └── index.html        # HTML shell for web build
 └── specs/
-    └── spec.md
+    ├── spec.md
+    └── implementation-plan.md
 ```
 
 ## Rendering Approach
 
-### 2D Vector Primitives
+### Primitives
 
-The renderer will support drawing:
-- Lines (with configurable width)
-- Rectangles (filled, outlined)
-- Circles/Ellipses (filled, outlined)
-- Triangles/Polygons
-- Bezier curves (optional, later)
+Initial implementation supports:
+- **Triangles** (filled, with per-vertex color)
+
+Additional primitives (lines, rectangles, circles, polygons) deferred to future work.
 
 ### Implementation Strategy
 
-1. **Immediate-mode batching:** Collect draw commands per frame, batch by primitive type
+1. **Immediate-mode batching:** Collect draw commands per frame
 2. **Vertex buffer:** Dynamic buffer updated each frame with geometry
-3. **Single shader:** WGSL shader handling all 2D primitives
+3. **Single shader:** WGSL shader for triangle rendering
 
 ### Coordinate System
 
 - Origin at top-left (0, 0)
 - Y increases downward (screen coordinates)
-- Normalized device coordinates handled in shader
+- Normalized device coordinates handled in shader via uniforms
 - Logical resolution independent of physical pixels
 
 ## Input Handling
 
 | Input Type | Desktop | Web |
 |------------|---------|-----|
-| Keyboard | GLFW callbacks | Emscripten events |
-| Mouse | GLFW callbacks | Emscripten events |
-| Touch | N/A | Emscripten touch events |
+| Mouse position | GLFW callbacks | Emscripten events |
+| Mouse buttons | GLFW callbacks | Emscripten events |
 
-## Game Loop
+Keyboard and touch input deferred to future work.
 
-Fixed timestep with interpolated rendering:
-- Logic updates at 60 Hz (configurable)
-- Rendering at display refresh rate (vsync)
-- Accumulator-based update loop
+## Render Loop
+
+Simple render loop with vsync:
+- Poll events each frame
+- Call App.update with delta time and mouse state
+- Call App.render
+- Present frame
+
+Fixed timestep game loop deferred to future work.
+
+## Headless Mode
+
+For automated testing and AI agent verification:
+
+- **CLI flag:** `--headless` enables headless mode
+- **Offscreen rendering:** Render to texture instead of window
+- **Screenshot API:** `Renderer.screenshot(path)` saves PNG to disk
+- **Resolution:** Configurable in application code
+
+Usage:
+```bash
+zig build run -- --headless
+```
 
 ## Build Commands
 
 ### Desktop
 ```bash
 zig build run
+```
+
+### Desktop (Headless)
+```bash
+zig build run -- --headless
 ```
 
 ### Web
@@ -94,29 +120,46 @@ zig build -Dtarget=wasm32-emscripten
 ## Milestones
 
 ### Phase 1: Minimal Triangle
-- [ ] Project setup with zgpu + zglfw
-- [ ] Window creation (desktop)
-- [ ] Clear screen to solid color
-- [ ] Render single triangle via WebGPU
+- Project setup with zgpu + zglfw
+- Window creation (desktop)
+- Clear screen to solid color
+- Render single triangle via WebGPU
+- Uniforms for screen-space coordinates
 
-### Phase 2: 2D Primitives
-- [ ] Basic vertex shader for 2D
-- [ ] Draw lines, rectangles, circles
-- [ ] Batched rendering
+### Phase 2: Triangle Primitive API
+- App structure separating logic from rendering
+- Draw command buffer for batched rendering
+- Color API with named constants and helpers
+- Static test pattern demonstrating triangles
 
-### Phase 3: Input & Game Loop
-- [ ] Keyboard/mouse input abstraction
-- [ ] Fixed timestep game loop
-- [ ] Basic interactivity demo
+### Phase 3: Input & Simple Loop
+- Platform abstraction layer
+- Mouse input (position + left/right/middle buttons)
+- Simple render loop with delta time
+- Interactive demo (triangle follows mouse click)
 
-### Phase 4: Web Build
-- [ ] Emscripten build configuration
-- [ ] Web-specific input handling
-- [ ] Test in Chrome with WebGPU
+### Phase 4: Headless Mode
+- CLI argument parsing
+- Render target abstraction
+- Offscreen rendering to texture
+- GPU readback to CPU memory
+- PNG export via screenshot API
+- Headless platform implementation
 
-### Phase 5: Polish
-- [ ] Touch input (web)
-- [ ] Performance profiling
+### Phase 5: Web Build
+- Emscripten build configuration
+- Web platform with canvas integration
+- Emscripten main loop (requestAnimationFrame)
+- Browser WebGPU initialization
+- Mouse input via Emscripten events
+- HTML shell with WebGPU feature detection
+
+## Future Work
+
+- Additional primitives: lines, rectangles, circles, ellipses, polygons, bezier curves
+- Keyboard input
+- Touch input (web)
+- Fixed timestep game loop
 
 ## References
 
