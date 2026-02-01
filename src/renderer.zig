@@ -1458,16 +1458,6 @@ pub const Renderer = struct {
             return RendererError.ScreenshotFailed;
         };
 
-        const render_pipeline = self.render_pipeline orelse {
-            log.err("cannot take screenshot: render pipeline not initialized", .{});
-            return RendererError.ScreenshotFailed;
-        };
-
-        const vertex_buffer = self.vertex_buffer orelse {
-            log.err("cannot take screenshot: vertex buffer not initialized", .{});
-            return RendererError.ScreenshotFailed;
-        };
-
         const width = self.screenshot_width;
         const height = self.screenshot_height;
         const aligned_bytes_per_row = calcAlignedBytesPerRow(width);
@@ -1506,15 +1496,9 @@ pub const Renderer = struct {
             .color_attachments = @ptrCast(&color_attachment),
         });
 
-        // Draw the triangle
-        render_pass.setPipeline(render_pipeline);
-        // Set bind group 0 (uniforms) - required by the pipeline layout
-        if (self.bind_group) |bind_group| {
-            render_pass.setBindGroup(0, bind_group, &.{});
-        }
-        const vertex_buffer_size: u64 = @sizeOf(@TypeOf(test_triangle_vertices));
-        render_pass.setVertexBuffer(0, vertex_buffer, 0, vertex_buffer_size);
-        render_pass.draw(3, 1, 0, 0);
+        // Flush all queued triangles using the batched rendering pipeline.
+        // This renders whatever the app has queued via queueTriangle().
+        self.flushBatch(render_pass);
         render_pass.end();
 
         // Copy from screenshot texture to staging buffer

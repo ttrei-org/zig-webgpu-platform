@@ -86,25 +86,77 @@ pub const App = struct {
     pub fn render(self: *const Self, renderer: *Renderer) void {
         _ = self;
 
-        // Queue a colorful test triangle in screen coordinates.
+        // Queue multiple triangles to verify batched rendering works correctly.
         // Coordinates are in pixels, origin at top-left.
-        // For a 400x300 window, this triangle is centered.
+        // For a 400x300 window, triangles are positioned across the viewport.
+
+        // Triangle 1: Large centered RGB triangle (classic test pattern)
         renderer.queueTriangle(
             .{
-                // Bottom-left
-                .{ 100.0, 225.0 },
-                // Bottom-right
-                .{ 300.0, 225.0 },
-                // Top-center
-                .{ 200.0, 75.0 },
+                .{ 100.0, 225.0 }, // Bottom-left
+                .{ 300.0, 225.0 }, // Bottom-right
+                .{ 200.0, 75.0 }, // Top-center
             },
             .{
-                // Red
-                .{ 1.0, 0.0, 0.0 },
-                // Green
-                .{ 0.0, 1.0, 0.0 },
-                // Blue
-                .{ 0.0, 0.0, 1.0 },
+                .{ 1.0, 0.0, 0.0 }, // Red
+                .{ 0.0, 1.0, 0.0 }, // Green
+                .{ 0.0, 0.0, 1.0 }, // Blue
+            },
+        );
+
+        // Triangle 2: Small yellow triangle (top-left corner)
+        renderer.queueTriangle(
+            .{
+                .{ 20.0, 80.0 }, // Bottom-left
+                .{ 80.0, 80.0 }, // Bottom-right
+                .{ 50.0, 20.0 }, // Top-center
+            },
+            .{
+                .{ 1.0, 1.0, 0.0 }, // Yellow
+                .{ 1.0, 0.8, 0.0 }, // Orange-yellow
+                .{ 1.0, 1.0, 0.2 }, // Light yellow
+            },
+        );
+
+        // Triangle 3: Small cyan triangle (top-right corner)
+        renderer.queueTriangle(
+            .{
+                .{ 320.0, 80.0 }, // Bottom-left
+                .{ 380.0, 80.0 }, // Bottom-right
+                .{ 350.0, 20.0 }, // Top-center
+            },
+            .{
+                .{ 0.0, 1.0, 1.0 }, // Cyan
+                .{ 0.0, 0.8, 1.0 }, // Light blue
+                .{ 0.2, 1.0, 1.0 }, // Bright cyan
+            },
+        );
+
+        // Triangle 4: Small magenta triangle (bottom-left corner)
+        renderer.queueTriangle(
+            .{
+                .{ 20.0, 280.0 }, // Bottom-left
+                .{ 80.0, 280.0 }, // Bottom-right
+                .{ 50.0, 240.0 }, // Top-center
+            },
+            .{
+                .{ 1.0, 0.0, 1.0 }, // Magenta
+                .{ 0.8, 0.0, 1.0 }, // Purple
+                .{ 1.0, 0.2, 1.0 }, // Light magenta
+            },
+        );
+
+        // Triangle 5: Small white/gray triangle (bottom-right corner)
+        renderer.queueTriangle(
+            .{
+                .{ 320.0, 280.0 }, // Bottom-left
+                .{ 380.0, 280.0 }, // Bottom-right
+                .{ 350.0, 240.0 }, // Top-center
+            },
+            .{
+                .{ 0.8, 0.8, 0.8 }, // Light gray
+                .{ 1.0, 1.0, 1.0 }, // White
+                .{ 0.6, 0.6, 0.6 }, // Medium gray
             },
         );
     }
