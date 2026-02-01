@@ -10,7 +10,6 @@ const std = @import("std");
 
 const renderer_mod = @import("renderer.zig");
 const Renderer = renderer_mod.Renderer;
-const Vertex = renderer_mod.Vertex;
 
 const log = std.log.scoped(.app);
 
@@ -77,28 +76,37 @@ pub const App = struct {
         self.frame_count += 1;
     }
 
-    /// Called once per frame after update to issue draw commands.
-    /// The application uses the renderer to draw shapes, text, and other elements.
+    /// Called once per frame after update to queue draw commands.
+    /// The application uses the renderer to queue shapes for batched rendering.
+    /// Draw commands are accumulated and rendered in a single batched draw call
+    /// when flushBatch() is called.
     ///
     /// Parameters:
-    /// - renderer: Pointer to the Renderer for issuing draw commands.
-    /// - render_pass: Active render pass encoder to record draw commands to.
-    pub fn render(self: *Self, renderer: *Renderer, render_pass: @import("zgpu").wgpu.RenderPassEncoder) void {
+    /// - renderer: Pointer to the Renderer for queuing draw commands.
+    pub fn render(self: *const Self, renderer: *Renderer) void {
         _ = self;
 
-        // Draw a colorful test triangle in screen coordinates.
+        // Queue a colorful test triangle in screen coordinates.
         // Coordinates are in pixels, origin at top-left.
         // For a 400x300 window, this triangle is centered.
-        const triangle_vertices: [3]Vertex = .{
-            // Bottom-left: red
-            .{ .position = .{ 100.0, 225.0 }, .color = .{ 1.0, 0.0, 0.0 } },
-            // Bottom-right: green
-            .{ .position = .{ 300.0, 225.0 }, .color = .{ 0.0, 1.0, 0.0 } },
-            // Top-center: blue
-            .{ .position = .{ 200.0, 75.0 }, .color = .{ 0.0, 0.0, 1.0 } },
-        };
-
-        renderer.drawTriangle(render_pass, &triangle_vertices);
+        renderer.queueTriangle(
+            .{
+                // Bottom-left
+                .{ 100.0, 225.0 },
+                // Bottom-right
+                .{ 300.0, 225.0 },
+                // Top-center
+                .{ 200.0, 75.0 },
+            },
+            .{
+                // Red
+                .{ 1.0, 0.0, 0.0 },
+                // Green
+                .{ 0.0, 1.0, 0.0 },
+                // Blue
+                .{ 0.0, 0.0, 1.0 },
+            },
+        );
     }
 
     /// Get the current frame count.

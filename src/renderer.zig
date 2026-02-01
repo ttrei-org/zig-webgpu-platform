@@ -641,10 +641,60 @@ pub const Renderer = struct {
         log.debug("triangle drawn", .{});
     }
 
+    /// Flush all queued triangle draw commands in a single batched draw call.
+    /// Uploads all queued triangle vertices to the GPU buffer and issues one draw call.
+    /// This batched approach is much more efficient than one draw call per triangle -
+    /// it minimizes GPU state changes and CPU overhead.
+    ///
+    /// Must be called while a render pass is active (before endRenderPass).
+    ///
+    /// Parameters:
+    /// - render_pass: Active render pass encoder to record the draw command to.
+    pub fn flushBatch(self: *Self, render_pass: zgpu.wgpu.RenderPassEncoder) void {
+        // Upload all queued triangle vertices to the GPU buffer
+        const vertex_count = self.convertTrianglesToVertices();
+
+        // Early exit if no triangles were queued
+        if (vertex_count == 0) {
+            return;
+        }
+
+        const render_pipeline = self.render_pipeline orelse {
+            log.warn("flushBatch: render pipeline not initialized", .{});
+            return;
+        };
+
+        const vertex_buffer = self.vertex_buffer orelse {
+            log.warn("flushBatch: vertex buffer not initialized", .{});
+            return;
+        };
+
+        // Set render pipeline - configures GPU to use our shader and vertex layout
+        render_pass.setPipeline(render_pipeline);
+
+        // Set bind group 0 (uniforms) - required by the pipeline layout
+        if (self.bind_group) |bind_group| {
+            render_pass.setBindGroup(0, bind_group, &.{});
+        }
+
+        // Bind vertex buffer with the exact size needed for all vertices
+        const vertex_buffer_size: u64 = @as(u64, vertex_count) * @sizeOf(Vertex);
+        render_pass.setVertexBuffer(0, vertex_buffer, 0, vertex_buffer_size);
+
+        // Issue a single draw call for all triangles in the batch.
+        // vertex_count = total_triangles * 3.
+        render_pass.draw(vertex_count, 1, 0, 0);
+
+        log.debug("batched draw: {} vertices ({} triangles)", .{ vertex_count, vertex_count / 3 });
+    }
+
     /// End the current frame and present it to the screen.
-    /// Processes queued draw commands, finishes the command encoder to create
-    /// a command buffer, submits it to the GPU queue, and presents the swap chain.
+    /// Finishes the command encoder to create a command buffer, submits it
+    /// to the GPU queue, and presents the swap chain.
     /// Call this once at the end of each frame after all drawing is complete.
+    ///
+    /// Note: flushBatch() should be called before endRenderPass() to render
+    /// any queued triangles. This function only handles frame submission.
     pub fn endFrame(self: *Self, frame_state: FrameState) void {
         const queue = self.queue orelse {
             log.err("cannot end frame: queue not initialized", .{});
@@ -655,14 +705,6 @@ pub const Renderer = struct {
             log.err("cannot end frame: swap chain not initialized", .{});
             return;
         };
-
-        // Process queued draw commands before GPU submission.
-        // Convert triangle commands to vertices for batched rendering.
-        const vertex_count = self.convertTrianglesToVertices();
-
-        if (vertex_count > 0) {
-            log.debug("converted {} vertices from triangle commands", .{vertex_count});
-        }
 
         // Finish the command encoder to create a command buffer
         const command_buffer = frame_state.command_encoder.finish(.{

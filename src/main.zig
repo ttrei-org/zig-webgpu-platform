@@ -132,8 +132,11 @@ pub fn main() void {
         // Begin render pass with cornflower blue clear color
         const render_pass = Renderer.beginRenderPass(frame_state, Renderer.cornflower_blue);
 
-        // Let the app issue draw commands
-        app.render(&renderer, render_pass);
+        // Let the app queue draw commands
+        app.render(&renderer);
+
+        // Flush all queued triangles in a single batched draw call
+        renderer.flushBatch(render_pass);
 
         // End render pass
         Renderer.endRenderPass(render_pass);
