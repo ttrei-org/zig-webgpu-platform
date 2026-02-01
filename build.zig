@@ -11,16 +11,31 @@ pub fn build(b: *std.Build) void {
     });
     const zgpu_module = zgpu_dep.module("root");
 
-    const exe = b.addExecutable(.{
-        .name = "zig_gui_experiment",
-        .root_module = b.createModule(.{
-            .root_source_file = b.path("src/main.zig"),
+    // Detect if building for native desktop (not emscripten/web)
+    const is_native = target.result.os.tag != .emscripten;
+
+    // Create the root module for the executable
+    const root_module = b.createModule(.{
+        .root_source_file = b.path("src/main.zig"),
+        .target = target,
+        .optimize = optimize,
+    });
+
+    // Add zgpu import
+    root_module.addImport("zgpu", zgpu_module);
+
+    // Fetch zglfw dependency and add import for desktop builds only
+    if (is_native) {
+        const zglfw_dep = b.dependency("zglfw", .{
             .target = target,
             .optimize = optimize,
-            .imports = &.{
-                .{ .name = "zgpu", .module = zgpu_module },
-            },
-        }),
+        });
+        root_module.addImport("zglfw", zglfw_dep.module("root"));
+    }
+
+    const exe = b.addExecutable(.{
+        .name = "zig_gui_experiment",
+        .root_module = root_module,
     });
 
     // Link Dawn/WebGPU and system dependencies

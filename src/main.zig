@@ -4,6 +4,7 @@
 
 const std = @import("std");
 const zgpu = @import("zgpu");
+const zglfw = @import("zglfw");
 
 const log = std.log.scoped(.main);
 
