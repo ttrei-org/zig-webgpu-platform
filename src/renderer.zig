@@ -40,6 +40,46 @@ pub const RendererError = error{
     ShaderCompilationFailed,
 };
 
+/// GPU vertex layout for triangle rendering.
+/// Matches VertexInput in triangle.wgsl:
+///   @location(0) position: vec2<f32>
+///   @location(1) color: vec3<f32>
+///
+/// Memory layout (20 bytes total):
+///   offset 0: position[0] (f32)
+///   offset 4: position[1] (f32)
+///   offset 8: color[0] (f32)
+///   offset 12: color[1] (f32)
+///   offset 16: color[2] (f32)
+pub const Vertex = extern struct {
+    position: [2]f32,
+    color: [3]f32,
+};
+
+/// Vertex attributes describing position and color shader inputs.
+/// Position at location 0, color at location 1.
+const vertex_attributes = [_]zgpu.wgpu.VertexAttribute{
+    .{
+        .format = .float32x2, // vec2<f32> for position
+        .offset = 0,
+        .shader_location = 0, // @location(0)
+    },
+    .{
+        .format = .float32x3, // vec3<f32> for color
+        .offset = @sizeOf([2]f32), // 8 bytes after position
+        .shader_location = 1, // @location(1)
+    },
+};
+
+/// Vertex buffer layout for the render pipeline.
+/// Stride of 20 bytes (5 floats), per-vertex stepping.
+pub const vertex_buffer_layout: zgpu.wgpu.VertexBufferLayout = .{
+    .array_stride = @sizeOf(Vertex), // 20 bytes
+    .step_mode = .vertex, // Per-vertex data
+    .attribute_count = vertex_attributes.len,
+    .attributes = &vertex_attributes,
+};
+
 /// Resources needed for rendering a single frame.
 /// Returned by beginFrame(), consumed by endFrame().
 pub const FrameState = struct {
