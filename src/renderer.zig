@@ -34,6 +34,17 @@ pub const RendererError = error{
     SurfaceCreationFailed,
     /// Failed to create swap chain.
     SwapChainCreationFailed,
+    /// Failed to begin frame (swap chain not initialized or texture unavailable).
+    BeginFrameFailed,
+};
+
+/// Resources needed for rendering a single frame.
+/// Returned by beginFrame(), consumed by endFrame().
+pub const FrameState = struct {
+    /// Texture view to render into (from swap chain).
+    texture_view: zgpu.wgpu.TextureView,
+    /// Command encoder for recording GPU commands this frame.
+    command_encoder: zgpu.wgpu.CommandEncoder,
 };
 
 /// Renderer encapsulates all WebGPU rendering state and operations.
@@ -143,6 +154,38 @@ pub const Renderer = struct {
 
         self.swapchain = swapchain;
         log.info("WebGPU swap chain created: {}x{}", .{ width, height });
+    }
+
+    /// Begin a new frame for rendering.
+    /// Gets the current swap chain texture view and creates a command encoder.
+    /// Call this once at the start of each frame before recording render commands.
+    /// Returns FrameState containing the texture view and command encoder.
+    pub fn beginFrame(self: *Self) RendererError!FrameState {
+        const swapchain = self.swapchain orelse {
+            log.err("cannot begin frame: swap chain not initialized", .{});
+            return RendererError.BeginFrameFailed;
+        };
+
+        const device = self.device orelse {
+            log.err("cannot begin frame: device not initialized", .{});
+            return RendererError.BeginFrameFailed;
+        };
+
+        // Get the texture view from the swap chain for this frame
+        const texture_view = swapchain.getCurrentTextureView();
+
+        // Create a command encoder for recording GPU commands this frame
+        const command_encoder = device.createCommandEncoder(.{
+            .next_in_chain = null,
+            .label = "Frame Command Encoder",
+        });
+
+        log.debug("frame begun", .{});
+
+        return FrameState{
+            .texture_view = texture_view,
+            .command_encoder = command_encoder,
+        };
     }
 
     /// Request a WebGPU adapter from the instance.
