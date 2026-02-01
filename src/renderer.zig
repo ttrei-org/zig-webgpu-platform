@@ -56,6 +56,14 @@ pub const RendererError = error{
 pub const Vertex = extern struct {
     position: [2]f32,
     color: [3]f32,
+
+    // Compile-time size guarantee: 5 floats * 4 bytes = 20 bytes total.
+    // This ensures the struct layout matches GPU vertex buffer expectations.
+    comptime {
+        if (@sizeOf(Vertex) != 20) {
+            @compileError("Vertex struct must be exactly 20 bytes for GPU compatibility");
+        }
+    }
 };
 
 /// Vertex attributes describing position and color shader inputs.
