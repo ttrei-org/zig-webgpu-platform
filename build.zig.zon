@@ -45,5 +45,9 @@
             .hash = "N-V-__8AAIz1QAKx8C8vft2YoHjGTjEAkH2QMR2UiAo8xZJ-",
             .lazy = true,
         },
+        .zigimg = .{
+            .url = "https://github.com/zigimg/zigimg/archive/refs/heads/master.tar.gz",
+            .hash = "zigimg-0.1.0-8_eo2kSGFwADIkeZYTgfnLOV-khh6ZRoGmK6F2-s_QbY",
+        },
     },
 }

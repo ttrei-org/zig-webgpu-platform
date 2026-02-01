@@ -8,6 +8,7 @@ const std = @import("std");
 const builtin = @import("builtin");
 const zgpu = @import("zgpu");
 const zglfw = @import("zglfw");
+const zigimg = @import("zigimg");
 
 const log = std.log.scoped(.renderer);
 
@@ -40,6 +41,8 @@ pub const RendererError = error{
     ShaderCompilationFailed,
     /// Failed to create render pipeline.
     PipelineCreationFailed,
+    /// Failed to take screenshot (buffer mapping or file I/O error).
+    ScreenshotFailed,
 };
 
 /// Uniform buffer data for coordinate transformation.
@@ -184,6 +187,17 @@ pub const Renderer = struct {
     /// Makes the uniform data (screen dimensions) available to the shader during rendering.
     /// Set during render pass to connect the uniform buffer to shader binding 0.
     bind_group: ?zgpu.wgpu.BindGroup,
+    /// Texture for screenshot capture.
+    /// Created with copy_src usage to allow copying to a staging buffer.
+    /// Matches swap chain dimensions and is recreated on resize.
+    screenshot_texture: ?zgpu.wgpu.Texture,
+    /// Staging buffer for GPU-to-CPU pixel readback.
+    /// Used to map rendered pixels to CPU memory for file writing.
+    screenshot_staging_buffer: ?zgpu.wgpu.Buffer,
+    /// Width of the screenshot resources (for resize detection).
+    screenshot_width: u32,
+    /// Height of the screenshot resources (for resize detection).
+    screenshot_height: u32,
 
     /// Initialize the renderer with a GLFW window.
     /// Creates a WebGPU instance, surface, adapter (compatible with surface), device,
@@ -341,6 +355,11 @@ pub const Renderer = struct {
             .vertex_buffer = vertex_buffer,
             .uniform_buffer = uniform_buffer,
             .bind_group = bind_group,
+            // Screenshot resources are created lazily on first capture
+            .screenshot_texture = null,
+            .screenshot_staging_buffer = null,
+            .screenshot_width = 0,
+            .screenshot_height = 0,
         };
     }
 
@@ -1009,6 +1028,315 @@ pub const Renderer = struct {
         });
     }
 
+    /// WebGPU requires buffer row alignment of 256 bytes.
+    const copy_bytes_per_row_alignment: u32 = 256;
+
+    /// Align a value up to a multiple of alignment.
+    fn alignUp(value: u32, alignment: u32) u32 {
+        return (value + alignment - 1) / alignment * alignment;
+    }
+
+    /// Calculate the aligned bytes per row for a given width (BGRA8 = 4 bytes per pixel).
+    fn calcAlignedBytesPerRow(width: u32) u32 {
+        const unaligned = width * 4;
+        return alignUp(unaligned, copy_bytes_per_row_alignment);
+    }
+
+    /// Ensure screenshot resources exist and match current swap chain dimensions.
+    /// Creates or recreates the screenshot texture and staging buffer if needed.
+    fn ensureScreenshotResources(self: *Self) void {
+        const device = self.device orelse return;
+        const width = self.swapchain_width;
+        const height = self.swapchain_height;
+
+        // Check if resources already exist with correct dimensions
+        if (self.screenshot_texture != null and
+            self.screenshot_width == width and
+            self.screenshot_height == height)
+        {
+            return;
+        }
+
+        // Release old resources if they exist
+        if (self.screenshot_texture) |tex| {
+            tex.release();
+            self.screenshot_texture = null;
+        }
+        if (self.screenshot_staging_buffer) |buf| {
+            buf.release();
+            self.screenshot_staging_buffer = null;
+        }
+
+        // Create screenshot texture as a render target with copy_src.
+        // render_attachment: we render to this texture
+        // copy_src: we copy from this texture to the staging buffer
+        self.screenshot_texture = device.createTexture(.{
+            .next_in_chain = null,
+            .label = "Screenshot Texture",
+            .usage = .{ .render_attachment = true, .copy_src = true },
+            .dimension = .tdim_2d,
+            .size = .{
+                .width = width,
+                .height = height,
+                .depth_or_array_layers = 1,
+            },
+            .format = .bgra8_unorm,
+            .mip_level_count = 1,
+            .sample_count = 1,
+            .view_format_count = 0,
+            .view_formats = null,
+        });
+
+        // Create staging buffer for CPU readback.
+        // Size = aligned_bytes_per_row * height.
+        const aligned_bytes_per_row = calcAlignedBytesPerRow(width);
+        const buffer_size: u64 = @as(u64, aligned_bytes_per_row) * @as(u64, height);
+
+        self.screenshot_staging_buffer = device.createBuffer(.{
+            .next_in_chain = null,
+            .label = "Screenshot Staging Buffer",
+            .usage = .{ .map_read = true, .copy_dst = true },
+            .size = buffer_size,
+            .mapped_at_creation = .false,
+        });
+
+        self.screenshot_width = width;
+        self.screenshot_height = height;
+
+        log.info("screenshot resources created: {}x{} (buffer size: {} bytes)", .{
+            width, height, buffer_size,
+        });
+    }
+
+    /// Context for async buffer mapping callback.
+    const MapCallbackContext = struct {
+        status: zgpu.wgpu.BufferMapAsyncStatus = .unknown,
+        completed: bool = false,
+    };
+
+    /// Callback for buffer mapAsync operation.
+    fn mapCallback(
+        status: zgpu.wgpu.BufferMapAsyncStatus,
+        userdata: ?*anyopaque,
+    ) callconv(.c) void {
+        const ctx: *MapCallbackContext = @ptrCast(@alignCast(userdata));
+        ctx.status = status;
+        ctx.completed = true;
+    }
+
+    /// Take a screenshot of the current frame and save it to a PNG file.
+    /// This re-renders the current scene to a separate texture and copies to CPU memory.
+    ///
+    /// This function:
+    /// 1. Creates a render pass targeting the screenshot texture
+    /// 2. Re-renders the scene (triangle) to capture pixels
+    /// 3. Copies the texture to a staging buffer
+    /// 4. Maps the buffer and writes to a PNG file
+    pub fn takeScreenshot(self: *Self, filename: []const u8) RendererError!void {
+        const device = self.device orelse {
+            log.err("cannot take screenshot: device not initialized", .{});
+            return RendererError.ScreenshotFailed;
+        };
+
+        const queue = self.queue orelse {
+            log.err("cannot take screenshot: queue not initialized", .{});
+            return RendererError.ScreenshotFailed;
+        };
+
+        // Ensure screenshot resources exist
+        self.ensureScreenshotResources();
+
+        const screenshot_texture = self.screenshot_texture orelse {
+            log.err("failed to create screenshot texture", .{});
+            return RendererError.ScreenshotFailed;
+        };
+
+        const staging_buffer = self.screenshot_staging_buffer orelse {
+            log.err("failed to create staging buffer", .{});
+            return RendererError.ScreenshotFailed;
+        };
+
+        const render_pipeline = self.render_pipeline orelse {
+            log.err("cannot take screenshot: render pipeline not initialized", .{});
+            return RendererError.ScreenshotFailed;
+        };
+
+        const vertex_buffer = self.vertex_buffer orelse {
+            log.err("cannot take screenshot: vertex buffer not initialized", .{});
+            return RendererError.ScreenshotFailed;
+        };
+
+        const width = self.screenshot_width;
+        const height = self.screenshot_height;
+        const aligned_bytes_per_row = calcAlignedBytesPerRow(width);
+
+        // Create a texture view for the screenshot texture
+        const screenshot_view = screenshot_texture.createView(.{
+            .next_in_chain = null,
+            .label = "Screenshot Texture View",
+            .format = .bgra8_unorm,
+            .dimension = .tvdim_2d,
+            .base_mip_level = 0,
+            .mip_level_count = 1,
+            .base_array_layer = 0,
+            .array_layer_count = 1,
+            .aspect = .all,
+        });
+        defer screenshot_view.release();
+
+        // Create a command encoder for rendering and copy operations
+        const encoder = device.createCommandEncoder(.{
+            .next_in_chain = null,
+            .label = "Screenshot Encoder",
+        });
+
+        // Render the scene to the screenshot texture
+        const color_attachment: zgpu.wgpu.RenderPassColorAttachment = .{
+            .view = screenshot_view,
+            .load_op = .clear,
+            .store_op = .store,
+            .clear_value = cornflower_blue,
+        };
+
+        const render_pass = encoder.beginRenderPass(.{
+            .label = "Screenshot Render Pass",
+            .color_attachment_count = 1,
+            .color_attachments = @ptrCast(&color_attachment),
+        });
+
+        // Draw the triangle
+        render_pass.setPipeline(render_pipeline);
+        // Set bind group 0 (uniforms) - required by the pipeline layout
+        if (self.bind_group) |bind_group| {
+            render_pass.setBindGroup(0, bind_group, &.{});
+        }
+        const vertex_buffer_size: u64 = @sizeOf(@TypeOf(test_triangle_vertices));
+        render_pass.setVertexBuffer(0, vertex_buffer, 0, vertex_buffer_size);
+        render_pass.draw(3, 1, 0, 0);
+        render_pass.end();
+
+        // Copy from screenshot texture to staging buffer
+        encoder.copyTextureToBuffer(
+            .{
+                .texture = screenshot_texture,
+                .mip_level = 0,
+                .origin = .{ .x = 0, .y = 0, .z = 0 },
+                .aspect = .all,
+            },
+            .{
+                .buffer = staging_buffer,
+                .layout = .{
+                    .offset = 0,
+                    .bytes_per_row = aligned_bytes_per_row,
+                    .rows_per_image = height,
+                },
+            },
+            .{
+                .width = width,
+                .height = height,
+                .depth_or_array_layers = 1,
+            },
+        );
+
+        // Submit the commands
+        const commands = encoder.finish(.{
+            .label = "Screenshot Commands",
+        });
+        queue.submit(&[_]zgpu.wgpu.CommandBuffer{commands});
+
+        // Map the staging buffer for CPU read
+        const buffer_size: u64 = @as(u64, aligned_bytes_per_row) * @as(u64, height);
+        var map_ctx: MapCallbackContext = .{};
+
+        staging_buffer.mapAsync(
+            .{ .read = true },
+            0,
+            buffer_size,
+            &mapCallback,
+            @ptrCast(&map_ctx),
+        );
+
+        // Poll the device until mapping is complete.
+        // Dawn processes mapping synchronously on tick(), so we poll in a loop.
+        while (!map_ctx.completed) {
+            device.tick();
+        }
+
+        if (map_ctx.status != .success) {
+            log.err("buffer mapping failed with status: {}", .{map_ctx.status});
+            return RendererError.ScreenshotFailed;
+        }
+
+        // Get the mapped data
+        const mapped_data = staging_buffer.getConstMappedRange(u8, 0, buffer_size) orelse {
+            log.err("failed to get mapped range", .{});
+            staging_buffer.unmap();
+            return RendererError.ScreenshotFailed;
+        };
+
+        // Write to PNG file
+        self.writePngFile(filename, mapped_data, width, height, aligned_bytes_per_row) catch |err| {
+            log.err("failed to write PNG file: {}", .{err});
+            staging_buffer.unmap();
+            return RendererError.ScreenshotFailed;
+        };
+
+        // Unmap the buffer
+        staging_buffer.unmap();
+
+        log.info("screenshot saved to: {s}", .{filename});
+    }
+
+    /// Write pixel data to a PNG file using zigimg.
+    /// Converts BGRA to RGBA and writes to PNG format.
+    fn writePngFile(
+        self: *Self,
+        filename: []const u8,
+        data: []const u8,
+        width: u32,
+        height: u32,
+        aligned_bytes_per_row: u32,
+    ) !void {
+        _ = self;
+
+        const allocator = std.heap.page_allocator;
+
+        // Create RGBA pixel data from BGRA source
+        const pixel_count = @as(usize, width) * @as(usize, height);
+        var rgba_pixels = try allocator.alloc(zigimg.color.Rgba32, pixel_count);
+        defer allocator.free(rgba_pixels);
+
+        // Convert BGRA to RGBA
+        for (0..height) |y| {
+            const src_row_offset = y * aligned_bytes_per_row;
+            for (0..width) |x| {
+                const src_pixel = src_row_offset + x * 4;
+                const dst_idx = y * width + x;
+                rgba_pixels[dst_idx] = .{
+                    .r = data[src_pixel + 2], // R from BGRA offset 2
+                    .g = data[src_pixel + 1], // G from BGRA offset 1
+                    .b = data[src_pixel + 0], // B from BGRA offset 0
+                    .a = data[src_pixel + 3], // A from BGRA offset 3
+                };
+            }
+        }
+
+        // Create zigimg Image from pixel data
+        var image: zigimg.Image = .{
+            .width = width,
+            .height = height,
+            .pixels = .{ .rgba32 = rgba_pixels },
+            .animation = .{},
+        };
+
+        // Write to PNG file
+        var write_buffer: [1024 * 1024]u8 = undefined;
+        image.writeToFilePath(allocator, filename, &write_buffer, .{ .png = .{} }) catch |err| {
+            log.err("zigimg writeToFilePath failed: {}", .{err});
+            return err;
+        };
+    }
+
     /// Clean up renderer resources.
     /// Releases all WebGPU resources held by the renderer.
     pub fn deinit(self: *Self) void {
@@ -1069,6 +1397,16 @@ pub const Renderer = struct {
         if (self.bind_group_layout) |layout| {
             layout.release();
             self.bind_group_layout = null;
+        }
+
+        // Release screenshot resources before device
+        if (self.screenshot_texture) |texture| {
+            texture.release();
+            self.screenshot_texture = null;
+        }
+        if (self.screenshot_staging_buffer) |buffer| {
+            buffer.release();
+            self.screenshot_staging_buffer = null;
         }
 
         // Release the device

@@ -122,6 +122,18 @@ pub const DesktopPlatform = struct {
         }
         return .{ .width = 0, .height = 0 };
     }
+
+    /// Check if a key was just pressed (transitioned from released to pressed this frame).
+    /// Returns true only once per key press (not while held).
+    pub fn isKeyPressed(self: *Self, key: zglfw.Key) bool {
+        if (self.window) |window| {
+            return window.getKey(key) == .press;
+        }
+        return false;
+    }
+
+    /// Re-export zglfw.Key for use in other modules.
+    pub const Key = zglfw.Key;
 };
 
 test "DesktopPlatform init and deinit" {

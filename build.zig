@@ -24,6 +24,13 @@ pub fn build(b: *std.Build) void {
     // Add zgpu import
     root_module.addImport("zgpu", zgpu_module);
 
+    // Fetch zigimg dependency and add import
+    const zigimg_dep = b.dependency("zigimg", .{
+        .target = target,
+        .optimize = optimize,
+    });
+    root_module.addImport("zigimg", zigimg_dep.module("zigimg"));
+
     // Fetch zglfw dependency and add import for desktop builds only
     var zglfw_dep: ?*std.Build.Dependency = null;
     if (is_native) {
