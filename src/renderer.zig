@@ -38,6 +38,8 @@ pub const RendererError = error{
     BeginFrameFailed,
     /// Failed to compile shader module.
     ShaderCompilationFailed,
+    /// Failed to create render pipeline.
+    PipelineCreationFailed,
 };
 
 /// GPU vertex layout for triangle rendering.
@@ -119,6 +121,9 @@ pub const Renderer = struct {
     /// Pipeline layout defining resource bindings for the render pipeline.
     /// Currently empty (no bind group layouts) - uniform buffer added later.
     pipeline_layout: ?zgpu.wgpu.PipelineLayout,
+    /// Render pipeline for triangle rendering.
+    /// Combines shader stages, vertex layout, and output format configuration.
+    render_pipeline: ?zgpu.wgpu.RenderPipeline,
 
     /// Initialize the renderer.
     /// Creates a WebGPU instance and requests a high-performance adapter.
@@ -183,6 +188,18 @@ pub const Renderer = struct {
         });
         log.debug("empty pipeline layout created", .{});
 
+        // Create render pipeline for triangle rendering
+        const render_pipeline = createRenderPipeline(device, pipeline_layout, shader_module) orelse {
+            log.err("failed to create render pipeline", .{});
+            pipeline_layout.release();
+            shader_module.release();
+            queue.release();
+            device.release();
+            adapter.release();
+            instance.release();
+            return RendererError.PipelineCreationFailed;
+        };
+
         return Self{
             .native_instance = native_instance,
             .instance = instance,
@@ -196,6 +213,7 @@ pub const Renderer = struct {
             .swapchain_height = 0,
             .shader_module = shader_module,
             .pipeline_layout = pipeline_layout,
+            .render_pipeline = render_pipeline,
         };
     }
 
@@ -461,6 +479,74 @@ pub const Renderer = struct {
         return shader_module;
     }
 
+    /// Create the render pipeline for triangle rendering.
+    /// Configures vertex and fragment stages, primitive topology, and output format.
+    /// Returns null if pipeline creation fails.
+    fn createRenderPipeline(
+        device: zgpu.wgpu.Device,
+        pipeline_layout: zgpu.wgpu.PipelineLayout,
+        shader_module: zgpu.wgpu.ShaderModule,
+    ) ?zgpu.wgpu.RenderPipeline {
+        // Color target state for BGRA8Unorm output (matches swap chain format)
+        const color_target: zgpu.wgpu.ColorTargetState = .{
+            .next_in_chain = null,
+            .format = .bgra8_unorm,
+            .blend = null, // No blending for opaque triangles
+            .write_mask = .{ .red = true, .green = true, .blue = true, .alpha = true },
+        };
+
+        // Fragment state with fs_main entry point
+        const fragment_state: zgpu.wgpu.FragmentState = .{
+            .next_in_chain = null,
+            .module = shader_module,
+            .entry_point = "fs_main",
+            .constant_count = 0,
+            .constants = null,
+            .target_count = 1,
+            .targets = @ptrCast(&color_target),
+        };
+
+        // Create the render pipeline
+        const pipeline = device.createRenderPipeline(.{
+            .next_in_chain = null,
+            .label = "Triangle Render Pipeline",
+            .layout = pipeline_layout,
+            .vertex = .{
+                .next_in_chain = null,
+                .module = shader_module,
+                .entry_point = "vs_main",
+                .constant_count = 0,
+                .constants = null,
+                .buffer_count = 1,
+                .buffers = @ptrCast(&vertex_buffer_layout),
+            },
+            .primitive = .{
+                .next_in_chain = null,
+                .topology = .triangle_list,
+                .strip_index_format = .undef,
+                .front_face = .ccw,
+                .cull_mode = .none, // No culling for 2D rendering
+            },
+            .depth_stencil = null, // No depth testing for 2D
+            .multisample = .{
+                .next_in_chain = null,
+                .count = 1, // No multisampling
+                .mask = 0xFFFFFFFF,
+                .alpha_to_coverage_enabled = false,
+            },
+            .fragment = &fragment_state,
+        });
+
+        // Check if pipeline creation succeeded
+        if (@intFromPtr(pipeline) == 0) {
+            log.err("render pipeline creation returned null", .{});
+            return null;
+        }
+
+        log.info("render pipeline created successfully", .{});
+        return pipeline;
+    }
+
     /// Request a WebGPU adapter from the instance.
     /// Prefers high-performance GPU and uses the default backend.
     /// Returns null if no suitable adapter is available.
@@ -712,6 +798,12 @@ pub const Renderer = struct {
             self.shader_module = null;
         }
 
+        // Release render pipeline before pipeline layout (it depends on the layout)
+        if (self.render_pipeline) |pipeline| {
+            pipeline.release();
+            self.render_pipeline = null;
+        }
+
         // Release pipeline layout before device (it depends on the device)
         if (self.pipeline_layout) |layout| {
             layout.release();
@@ -756,4 +848,5 @@ test "Renderer init and deinit" {
     _ = RendererError.SurfaceCreationFailed;
     _ = RendererError.SwapChainCreationFailed;
     _ = RendererError.ShaderCompilationFailed;
+    _ = RendererError.PipelineCreationFailed;
 }
