@@ -563,7 +563,28 @@ pub const Renderer = struct {
         log.debug("render pass ended", .{});
     }
 
-    /// Draw a triangle with the given vertices.
+    /// Queue a triangle for later batched rendering.
+    /// Creates a Triangle draw command and appends it to the command buffer.
+    /// Does not immediately render - just records the command for later execution.
+    /// This is the public API apps use to draw triangles.
+    ///
+    /// Parameters:
+    /// - positions: Three vertex positions in screen coordinates (x, y in pixels).
+    /// - colors: Color at each vertex for gradient interpolation.
+    ///
+    /// Note: The command buffer must be processed during endFrame to render the queued triangles.
+    pub fn queueTriangle(self: *Self, positions: [3][2]f32, colors: [3]Color) void {
+        const triangle: Triangle = .{
+            .positions = positions,
+            .colors = colors,
+        };
+        const command: DrawCommand = .{ .triangle = triangle };
+        self.command_buffer.append(self.allocator, command) catch |err| {
+            log.err("failed to queue triangle: {}", .{err});
+        };
+    }
+
+    /// Draw a triangle with the given vertices (immediate mode).
     /// Sets up the pipeline, bind groups, and vertex buffer, then issues the draw call.
     /// The vertices should be in screen coordinates (pixels).
     ///
