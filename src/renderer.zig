@@ -457,6 +457,10 @@ pub const Renderer = struct {
             return RendererError.BeginFrameFailed;
         };
 
+        // Clear previous frame's commands while keeping allocated memory for efficiency.
+        // Each frame starts fresh with an empty command list.
+        self.command_buffer.clearRetainingCapacity();
+
         // Check if window was resized and recreate swap chain if needed
         const fb_size = window.getFramebufferSize();
         const current_width: u32 = @intCast(fb_size[0]);
