@@ -67,13 +67,8 @@ pub fn main() void {
         // End render pass (no draw commands yet - just clearing)
         Renderer.endRenderPass(render_pass);
 
-        // Submit command buffer and present frame
-        const command_buffer = frame_state.command_encoder.finish(null);
-        renderer.queue.?.submit(&[_]@TypeOf(command_buffer){command_buffer});
-        renderer.swapchain.?.present();
-
-        // Release resources for this frame
-        frame_state.texture_view.release();
+        // End frame: submit command buffer and present swap chain
+        renderer.endFrame(frame_state);
     }
 
     log.info("zig-gui-experiment exiting", .{});
