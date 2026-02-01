@@ -244,9 +244,13 @@ pub const Renderer = struct {
     /// Render pipeline for triangle rendering.
     /// Combines shader stages, vertex layout, and output format configuration.
     render_pipeline: ?zgpu.wgpu.RenderPipeline,
-    /// Vertex buffer containing triangle vertex data.
-    /// Holds 3 vertices (60 bytes) for the test triangle.
+    /// Dynamic vertex buffer for triangle rendering.
+    /// Holds up to max_vertex_capacity vertices, reused each frame via queue.writeBuffer().
+    /// Size = max_vertex_capacity * @sizeOf(Vertex) = 10000 * 20 = 200KB.
     vertex_buffer: ?zgpu.wgpu.Buffer,
+    /// Maximum number of vertices the buffer can hold.
+    /// Set to 10,000 vertices (~200KB) for efficient batched rendering.
+    vertex_buffer_capacity: u32,
     /// Uniform buffer for screen dimensions.
     /// Holds the Uniforms struct (8 bytes data, 16 bytes allocated for GPU alignment).
     /// Updated each frame or on resize via queue.writeBuffer().
@@ -389,10 +393,13 @@ pub const Renderer = struct {
             return RendererError.PipelineCreationFailed;
         };
 
-        // Create vertex buffer with triangle data using mappedAtCreation for upload.
-        // Size = 3 vertices * 20 bytes per vertex = 60 bytes.
-        const vertex_buffer = createVertexBuffer(device);
-        log.info("vertex buffer created with triangle data", .{});
+        // Create dynamic vertex buffer with max capacity.
+        // Size = 10,000 vertices * 20 bytes = 200KB.
+        const vertex_result = createVertexBuffer(device);
+        log.info("dynamic vertex buffer created: {} vertices capacity ({} bytes)", .{
+            vertex_result.capacity,
+            @as(u64, vertex_result.capacity) * @sizeOf(Vertex),
+        });
 
         // Create uniform buffer for screen dimensions.
         // WebGPU requires uniform buffers to be 16-byte aligned, so we allocate 16 bytes
@@ -430,7 +437,8 @@ pub const Renderer = struct {
             .bind_group_layout = bind_group_layout,
             .pipeline_layout = pipeline_layout,
             .render_pipeline = render_pipeline,
-            .vertex_buffer = vertex_buffer,
+            .vertex_buffer = vertex_result.buffer,
+            .vertex_buffer_capacity = vertex_result.capacity,
             .uniform_buffer = uniform_buffer,
             .bind_group = bind_group,
             // Screenshot resources are created lazily on first capture
@@ -818,37 +826,35 @@ pub const Renderer = struct {
         return pipeline;
     }
 
-    /// Create a vertex buffer containing the test triangle data.
-    /// Uses mappedAtCreation for efficient data upload at buffer creation time.
-    /// The buffer is unmapped after copying data, making it ready for GPU use.
-    fn createVertexBuffer(device: zgpu.wgpu.Device) zgpu.wgpu.Buffer {
-        const vertex_data = &test_triangle_vertices;
-        const buffer_size: u64 = @sizeOf(@TypeOf(vertex_data.*));
+    /// Create a dynamic vertex buffer with maximum capacity.
+    /// The buffer is reused each frame - vertices are uploaded via queue.writeBuffer().
+    /// Usage: VERTEX (for binding as vertex buffer) | COPY_DST (for dynamic updates).
+    ///
+    /// Returns the buffer and its capacity.
+    fn createVertexBuffer(device: zgpu.wgpu.Device) struct { buffer: zgpu.wgpu.Buffer, capacity: u32 } {
+        const buffer_size: u64 = @as(u64, max_vertex_capacity) * @sizeOf(Vertex);
 
-        // Create buffer with mappedAtCreation for immediate data upload.
-        // Usage: VERTEX (for binding as vertex buffer) | COPY_DST (for potential future updates).
+        // Create buffer with VERTEX | COPY_DST usage for dynamic vertex data.
+        // mapped_at_creation is false since we'll upload data via writeBuffer each frame.
         const buffer = device.createBuffer(.{
             .next_in_chain = null,
-            .label = "Triangle Vertex Buffer",
+            .label = "Dynamic Vertex Buffer",
             .usage = .{ .vertex = true, .copy_dst = true },
             .size = buffer_size,
-            .mapped_at_creation = .true,
+            .mapped_at_creation = .false,
         });
 
-        // Get the mapped memory range and copy vertex data into it.
-        // getMappedRange returns a slice we can directly write to.
-        const mapped = buffer.getMappedRange(Vertex, 0, vertex_data.len);
-        if (mapped) |dst| {
-            @memcpy(dst, vertex_data);
-        } else {
-            log.err("failed to get mapped range for vertex buffer", .{});
-        }
-
-        // Unmap the buffer - data is now on the GPU and buffer is ready for rendering.
-        buffer.unmap();
-
-        return buffer;
+        return .{ .buffer = buffer, .capacity = max_vertex_capacity };
     }
+
+    /// Maximum vertex capacity for the dynamic vertex buffer.
+    /// 10,000 vertices at 20 bytes each = 200KB.
+    /// This provides enough capacity for ~3,333 triangles per frame.
+    pub const max_vertex_capacity: u32 = 10000;
+
+    /// Maximum number of triangles that can be rendered per frame.
+    /// Calculated as max_vertex_capacity / 3 (3 vertices per triangle).
+    pub const max_triangle_capacity: u32 = max_vertex_capacity / 3;
 
     /// Minimum uniform buffer size for WebGPU alignment.
     /// WebGPU requires uniform buffers to be 16-byte aligned. Since Uniforms is 8 bytes,
