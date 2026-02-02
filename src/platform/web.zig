@@ -578,10 +578,45 @@ pub const WebPlatform = struct {
     }
 
     /// Clean up platform resources.
-    /// In the browser, this may trigger cleanup of event listeners.
+    ///
+    /// In browser context, most cleanup is handled automatically on page unload.
+    /// However, for clean page reload scenarios (e.g., hot module replacement),
+    /// we explicitly:
+    /// 1. Clear the global platform pointer to prevent dangling pointer access
+    /// 2. Cancel the Emscripten main loop to stop frame callbacks
+    /// 3. Remove all registered HTML5 event listeners
+    /// 4. Reset internal state
+    ///
+    /// This ensures the WASM module can be cleanly reinitialized without stale state.
     pub fn deinit(self: *Self) void {
         log.info("web platform shutdown after {} frames", .{self.frame_count});
-        // Future: Remove DOM event listeners registered during init
+
+        // Clear global platform pointer first to prevent JavaScript callbacks
+        // from accessing this platform during or after cleanup.
+        clearGlobalPlatform();
+
+        // Cancel the main loop to stop requestAnimationFrame callbacks.
+        // This is important for clean reload scenarios where we want to
+        // stop the old loop before starting a new one.
+        emscripten.emscripten_cancel_main_loop();
+
+        // Remove all HTML5 event listeners registered via Emscripten APIs.
+        // This includes mouse, keyboard, resize, and wheel event handlers.
+        // Without this, listeners could fire into deallocated memory on reload.
+        emscripten.emscripten_html5_remove_all_event_listeners();
+
+        // Reset internal state for clean restart
+        self.quit_requested = false;
+        self.frame_count = 0;
+        self.mouse_state = .{
+            .x = 0,
+            .y = 0,
+            .left_pressed = false,
+            .right_pressed = false,
+            .middle_pressed = false,
+        };
+
+        log.info("web platform cleanup complete", .{});
     }
 
     /// Poll for events.
