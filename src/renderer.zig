@@ -106,8 +106,15 @@ pub const Color = struct {
     /// Alpha component [0.0, 1.0]. 1.0 = fully opaque, 0.0 = fully transparent.
     a: f32 = 1.0,
 
-    /// White color constant (fully opaque).
+    // Named color constants (all fully opaque).
     pub const white: Color = .{ .r = 1.0, .g = 1.0, .b = 1.0, .a = 1.0 };
+    pub const black: Color = .{ .r = 0.0, .g = 0.0, .b = 0.0, .a = 1.0 };
+    pub const red: Color = .{ .r = 1.0, .g = 0.0, .b = 0.0, .a = 1.0 };
+    pub const green: Color = .{ .r = 0.0, .g = 1.0, .b = 0.0, .a = 1.0 };
+    pub const blue: Color = .{ .r = 0.0, .g = 0.0, .b = 1.0, .a = 1.0 };
+    pub const yellow: Color = .{ .r = 1.0, .g = 1.0, .b = 0.0, .a = 1.0 };
+    pub const cyan: Color = .{ .r = 0.0, .g = 1.0, .b = 1.0, .a = 1.0 };
+    pub const magenta: Color = .{ .r = 1.0, .g = 0.0, .b = 1.0, .a = 1.0 };
 
     /// Convert to RGB array for vertex attribute compatibility.
     /// Discards the alpha channel for use with current vertex format.
