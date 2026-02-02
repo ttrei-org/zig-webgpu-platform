@@ -36,23 +36,31 @@ pub const std_options: std.Options = .{
 // Export zgpu types for use in other modules
 pub const GraphicsContext = zgpu.GraphicsContext;
 
-/// Command-line options parsed from arguments.
-const Options = struct {
+/// Application configuration parsed from command-line arguments.
+/// Holds all settings needed for application initialization.
+pub const Config = struct {
     /// If set, take a screenshot to this filename and exit.
     screenshot_filename: ?[]const u8 = null,
     /// If true, run in headless mode (no window display).
     /// Used for automated testing and screenshot generation.
     headless: bool = false,
+    /// Window/framebuffer width in pixels.
+    /// For headless mode, this is the render target resolution.
+    width: u32 = 800,
+    /// Window/framebuffer height in pixels.
+    /// For headless mode, this is the render target resolution.
+    height: u32 = 600,
 };
 
-/// Parse command-line arguments.
+/// Parse command-line arguments into a Config struct.
 /// Uses argsWithAllocator for cross-platform compatibility, then deallocates
 /// the iterator's internal buffers after parsing is complete.
-fn parseArgs(allocator: std.mem.Allocator) Options {
-    var opts: Options = .{};
+/// Supports: --screenshot=<file>, --headless, --width=N, --height=N
+fn parseArgs(allocator: std.mem.Allocator) Config {
+    var config: Config = .{};
     var args = std.process.argsWithAllocator(allocator) catch |err| {
         log.warn("failed to get command line arguments: {}", .{err});
-        return opts;
+        return config;
     };
     defer args.deinit();
 
@@ -60,20 +68,33 @@ fn parseArgs(allocator: std.mem.Allocator) Options {
 
     while (args.next()) |arg| {
         if (std.mem.startsWith(u8, arg, "--screenshot=")) {
-            opts.screenshot_filename = arg["--screenshot=".len..];
+            config.screenshot_filename = arg["--screenshot=".len..];
         } else if (std.mem.eql(u8, arg, "--headless")) {
-            opts.headless = true;
+            config.headless = true;
+        } else if (std.mem.startsWith(u8, arg, "--width=")) {
+            const width_str = arg["--width=".len..];
+            config.width = std.fmt.parseInt(u32, width_str, 10) catch {
+                log.warn("invalid --width value '{s}', using default 800", .{width_str});
+                continue;
+            };
+        } else if (std.mem.startsWith(u8, arg, "--height=")) {
+            const height_str = arg["--height=".len..];
+            config.height = std.fmt.parseInt(u32, height_str, 10) catch {
+                log.warn("invalid --height value '{s}', using default 600", .{height_str});
+                continue;
+            };
         }
     }
 
-    return opts;
+    return config;
 }
 
 pub fn main() void {
     log.info("zig-gui-experiment starting", .{});
 
     // Parse command-line arguments using page_allocator for cross-platform compatibility
-    const opts = parseArgs(std.heap.page_allocator);
+    const config = parseArgs(std.heap.page_allocator);
+    log.info("config: headless={}, {}x{}", .{ config.headless, config.width, config.height });
 
     // Initialize platform
     var platform = desktop.DesktopPlatform.init(std.heap.page_allocator) catch |err| {
@@ -82,8 +103,8 @@ pub fn main() void {
     };
     defer platform.deinit();
 
-    // Create window
-    platform.createWindow(400, 300, "Zig GUI Experiment") catch |err| {
+    // Create window using config dimensions
+    platform.createWindow(config.width, config.height, "Zig GUI Experiment") catch |err| {
         log.err("failed to create window: {}", .{err});
         return;
     };
@@ -172,7 +193,7 @@ pub fn main() void {
         // Handle --screenshot option: take screenshot after first frame and exit
         if (!first_frame_rendered) {
             first_frame_rendered = true;
-            if (opts.screenshot_filename) |filename| {
+            if (config.screenshot_filename) |filename| {
                 renderer.takeScreenshot(filename) catch |err| {
                     log.err("failed to take startup screenshot: {}", .{err});
                 };
