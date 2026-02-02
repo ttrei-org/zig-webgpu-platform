@@ -979,8 +979,10 @@ pub const WebPlatform = struct {
     /// Called by the browser when the mouse moves over the canvas element.
     /// Updates the global platform's mouse position using canvas-relative coordinates.
     ///
-    /// The callback uses canvasX/canvasY which are coordinates relative to the canvas
-    /// element's top-left corner, accounting for CSS transforms and scroll position.
+    /// The callback converts page coordinates to canvas-local coordinates, accounting for:
+    /// - Canvas position on the page (handled by Emscripten's canvasX/canvasY)
+    /// - CSS display size vs backing buffer size (scaled by our conversion)
+    /// - Any CSS transforms on the canvas element
     fn mousemoveCallback(
         _: c_int, // event_type - always EMSCRIPTEN_EVENT_MOUSEMOVE
         mouse_event: *const emscripten.EmscriptenMouseEvent,
@@ -990,13 +992,15 @@ pub const WebPlatform = struct {
         // This is safe because the callback is only registered when the platform is initialized,
         // and we remove all event listeners in deinit() before deallocating.
         if (global_web_platform) |p| {
-            // Use canvasX/canvasY for coordinates relative to the canvas element.
-            // These are the most useful for UI hit testing as they account for
-            // canvas position, scrolling, and CSS transforms.
-            p.updateMousePosition(
+            // Convert page coordinates to canvas coordinates.
+            // canvasX/canvasY are in CSS pixels relative to the canvas element.
+            // We scale them to match the canvas backing buffer coordinates
+            // in case CSS size differs from actual canvas size.
+            const coords = p.pageToCanvasCoordinates(
                 @floatFromInt(mouse_event.canvasX),
                 @floatFromInt(mouse_event.canvasY),
             );
+            p.updateMousePosition(coords[0], coords[1]);
         }
         // Return false to allow event propagation to other handlers.
         // This enables coexisting with JavaScript event listeners if needed.
@@ -1098,6 +1102,61 @@ pub const WebPlatform = struct {
     pub fn updateMousePosition(self: *Self, x: f32, y: f32) void {
         self.mouse_state.x = x;
         self.mouse_state.y = y;
+    }
+
+    /// Convert page/CSS coordinates to canvas backing buffer coordinates.
+    ///
+    /// This function handles the conversion from coordinates in CSS pixels
+    /// (as provided by browser mouse events) to coordinates in the canvas
+    /// backing buffer's coordinate system.
+    ///
+    /// The conversion accounts for:
+    /// - Canvas position on the page (already handled by canvasX/canvasY from Emscripten)
+    /// - CSS display size vs actual canvas backing buffer size
+    /// - Device pixel ratio for high-DPI displays
+    ///
+    /// Parameters:
+    /// - css_x, css_y: Coordinates in CSS pixels relative to the canvas element.
+    ///   These are typically canvasX/canvasY from EmscriptenMouseEvent.
+    ///
+    /// Returns:
+    /// - A tuple of (x, y) coordinates scaled to the canvas backing buffer size.
+    ///   These coordinates match the coordinate system used by the renderer.
+    ///
+    /// Example:
+    /// If the canvas element is displayed at 800x600 CSS pixels but has a
+    /// backing buffer of 1600x1200 pixels (2x device pixel ratio), a mouse
+    /// event at CSS position (400, 300) would be converted to (800, 600).
+    pub fn pageToCanvasCoordinates(self: *const Self, css_x: f32, css_y: f32) [2]f32 {
+        // Query the current CSS display size of the canvas element.
+        // This may differ from the backing buffer size if CSS styling
+        // (e.g., width: 100%) scales the canvas display.
+        var css_width: f64 = 0;
+        var css_height: f64 = 0;
+        const result = emscripten.emscripten_get_element_css_size(
+            self.canvas_selector,
+            &css_width,
+            &css_height,
+        );
+
+        // If we can't get CSS size, fall back to using coordinates as-is.
+        // This maintains backward compatibility and works for simple cases
+        // where CSS size equals backing buffer size.
+        if (result != emscripten.EMSCRIPTEN_RESULT_SUCCESS or css_width <= 0 or css_height <= 0) {
+            log.debug("using raw CSS coordinates (CSS size query failed or zero)", .{});
+            return .{ css_x, css_y };
+        }
+
+        // Calculate scale factors to convert from CSS pixels to backing buffer pixels.
+        // The backing buffer size is self.width/height (the actual canvas dimensions).
+        const scale_x: f32 = @as(f32, @floatFromInt(self.width)) / @as(f32, @floatCast(css_width));
+        const scale_y: f32 = @as(f32, @floatFromInt(self.height)) / @as(f32, @floatCast(css_height));
+
+        // Apply the scale to convert from CSS coordinates to backing buffer coordinates.
+        const canvas_x = css_x * scale_x;
+        const canvas_y = css_y * scale_y;
+
+        return .{ canvas_x, canvas_y };
     }
 
     /// Update mouse button state from JavaScript callback.
