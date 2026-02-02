@@ -1,0 +1,1 @@
+../../../skills/playwright-cli/skills/playwright-cli/SKILL.md

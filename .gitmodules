@@ -1,0 +1,3 @@
+[submodule "skills/playwright-cli"]
+	path = skills/playwright-cli
+	url = https://github.com/microsoft/playwright-cli.git
