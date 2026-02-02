@@ -331,6 +331,15 @@ test "Dimensions struct size and alignment" {
 pub const OffscreenRenderTarget = struct {
     const Self = @This();
 
+    /// Context for tracking the status of an async buffer map operation.
+    /// Passed as userdata to mapAsync callback and updated when mapping completes.
+    pub const MapCallbackContext = struct {
+        /// The status returned by the mapping operation.
+        status: zgpu.wgpu.BufferMapAsyncStatus = .success,
+        /// Set to true when the callback has been invoked.
+        completed: bool = false,
+    };
+
     /// The offscreen texture for rendering.
     texture: zgpu.wgpu.Texture,
     /// Texture view for render pass attachment.
@@ -487,6 +496,52 @@ pub const OffscreenRenderTarget = struct {
         );
 
         log.debug("queued copy of offscreen texture ({}x{}) to staging buffer", .{ self.width, self.height });
+    }
+
+    /// Callback for buffer mapAsync operation.
+    /// Sets the status and marks the operation as completed.
+    fn mapCallback(
+        status: zgpu.wgpu.BufferMapAsyncStatus,
+        userdata: ?*anyopaque,
+    ) callconv(.c) void {
+        const ctx: *MapCallbackContext = @ptrCast(@alignCast(userdata));
+        ctx.status = status;
+        ctx.completed = true;
+    }
+
+    /// Map the staging buffer for CPU read access.
+    /// This initiates an async mapping operation with MapMode.read.
+    ///
+    /// This must be called after:
+    /// 1. copyToStagingBuffer() has been called to queue the copy
+    /// 2. The command buffer has been submitted to the GPU queue
+    ///
+    /// The buffer cannot be used for GPU operations while mapped.
+    /// After mapping completes, use getConstMappedRange() to access the data.
+    ///
+    /// Parameters:
+    /// - ctx: A MapCallbackContext to track the async operation status.
+    ///   The caller must keep this alive until ctx.completed becomes true.
+    ///
+    /// Usage:
+    /// ```
+    /// var map_ctx: MapCallbackContext = .{};
+    /// offscreen_target.mapStagingBuffer(&map_ctx);
+    /// // Poll device.tick() until map_ctx.completed is true
+    /// // Then check map_ctx.status and access data via getConstMappedRange()
+    /// ```
+    pub fn mapStagingBuffer(self: *const Self, ctx: *MapCallbackContext) void {
+        const buffer_size = self.getStagingBufferSize();
+
+        self.staging_buffer.mapAsync(
+            .{ .read = true },
+            0,
+            buffer_size,
+            &mapCallback,
+            @ptrCast(ctx),
+        );
+
+        log.debug("initiated async map of staging buffer ({} bytes) for CPU read", .{buffer_size});
     }
 
     // Implementation functions for the RenderTarget interface.
