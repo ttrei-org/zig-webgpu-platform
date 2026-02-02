@@ -220,6 +220,105 @@ pub const App = struct {
                 Color.rgb(0.4, 0.4, 0.4), // Medium gray
             },
         );
+
+        // Position test triangles - verify screen coordinate system works at boundaries.
+        // These small markers at exact screen positions confirm coordinate transform is correct.
+        // Window dimensions: 400x300. Valid pixel range: x=[0,399], y=[0,299].
+        const width: f32 = 400.0;
+        const height: f32 = 300.0;
+        const marker_size: f32 = 12.0;
+
+        // Corner markers: small triangles pointing into each corner.
+        // Tests coordinate system at extreme positions (0,0), (width,0), (0,height), (width,height).
+
+        // Top-left corner (0,0): red marker pointing into corner
+        renderer.queueTriangle(
+            .{
+                .{ 0.0, 0.0 }, // Exact corner
+                .{ marker_size, 0.0 }, // Along top edge
+                .{ 0.0, marker_size }, // Along left edge
+            },
+            .{ Color.red, Color.red, Color.red },
+        );
+
+        // Top-right corner (width,0): green marker pointing into corner
+        renderer.queueTriangle(
+            .{
+                .{ width, 0.0 }, // Exact corner
+                .{ width - marker_size, 0.0 }, // Along top edge
+                .{ width, marker_size }, // Along right edge
+            },
+            .{ Color.green, Color.green, Color.green },
+        );
+
+        // Bottom-left corner (0,height): blue marker pointing into corner
+        renderer.queueTriangle(
+            .{
+                .{ 0.0, height }, // Exact corner
+                .{ marker_size, height }, // Along bottom edge
+                .{ 0.0, height - marker_size }, // Along left edge
+            },
+            .{ Color.blue, Color.blue, Color.blue },
+        );
+
+        // Bottom-right corner (width,height): white marker pointing into corner
+        renderer.queueTriangle(
+            .{
+                .{ width, height }, // Exact corner
+                .{ width - marker_size, height }, // Along bottom edge
+                .{ width, height - marker_size }, // Along right edge
+            },
+            .{ Color.white, Color.white, Color.white },
+        );
+
+        // Edge center markers: triangles at midpoint of each edge.
+        // Verifies coordinate system works along screen boundaries.
+        const edge_marker_half: f32 = 8.0;
+        const edge_depth: f32 = 10.0;
+
+        // Top edge center: orange marker pointing down
+        renderer.queueTriangle(
+            .{
+                .{ width / 2.0, 0.0 }, // Apex at top edge center
+                .{ width / 2.0 - edge_marker_half, edge_depth }, // Base left
+                .{ width / 2.0 + edge_marker_half, edge_depth }, // Base right
+            },
+            .{
+                Color.fromHex(0xFF8000), // Orange
+                Color.fromHex(0xFF8000),
+                Color.fromHex(0xFF8000),
+            },
+        );
+
+        // Bottom edge center: cyan marker pointing up
+        renderer.queueTriangle(
+            .{
+                .{ width / 2.0, height }, // Apex at bottom edge center
+                .{ width / 2.0 - edge_marker_half, height - edge_depth }, // Base left
+                .{ width / 2.0 + edge_marker_half, height - edge_depth }, // Base right
+            },
+            .{ Color.cyan, Color.cyan, Color.cyan },
+        );
+
+        // Left edge center: yellow marker pointing right
+        renderer.queueTriangle(
+            .{
+                .{ 0.0, height / 2.0 }, // Apex at left edge center
+                .{ edge_depth, height / 2.0 - edge_marker_half }, // Base top
+                .{ edge_depth, height / 2.0 + edge_marker_half }, // Base bottom
+            },
+            .{ Color.yellow, Color.yellow, Color.yellow },
+        );
+
+        // Right edge center: magenta marker pointing left
+        renderer.queueTriangle(
+            .{
+                .{ width, height / 2.0 }, // Apex at right edge center
+                .{ width - edge_depth, height / 2.0 - edge_marker_half }, // Base top
+                .{ width - edge_depth, height / 2.0 + edge_marker_half }, // Base bottom
+            },
+            .{ Color.magenta, Color.magenta, Color.magenta },
+        );
     }
 
     /// Get the current frame count.
