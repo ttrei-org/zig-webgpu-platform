@@ -51,6 +51,11 @@ pub const App = struct {
     /// Initially centered in the window (200, 150 for 400x300 window).
     triangle_position: [2]f32,
 
+    /// Rotation angle for animated triangles (radians).
+    /// Incremented each frame using delta time to demonstrate smooth vsync rendering.
+    /// A full rotation takes ~4 seconds (tau/4 radians per second).
+    rotation_angle: f32,
+
     /// Initialize the application with the given allocator.
     /// The allocator is stored for any dynamic allocations the app may need.
     pub fn init(allocator: std.mem.Allocator) Self {
@@ -69,6 +74,7 @@ pub const App = struct {
             .mouse_state = initial_mouse_state,
             .prev_mouse_state = initial_mouse_state,
             .triangle_position = .{ 200.0, 150.0 }, // Center of 400x300 window
+            .rotation_angle = 0.0,
         };
     }
 
@@ -100,8 +106,18 @@ pub const App = struct {
     ///   Used for frame-rate independent movement and animations.
     /// - mouse_state: Current mouse state including position and button states.
     pub fn update(self: *Self, delta_time: f32, mouse_state: MouseState) void {
-        _ = delta_time; // Currently unused, will be used for animations
         self.frame_count += 1;
+
+        // Update rotation angle for animated triangles.
+        // Rotate at tau/4 radians per second (~1.57 rad/s, ~90 degrees/s).
+        // This creates a smooth, visible rotation to verify vsync rendering.
+        const rotation_speed: f32 = std.math.tau / 4.0;
+        self.rotation_angle += rotation_speed * delta_time;
+
+        // Wrap angle to prevent floating-point precision issues over long runtimes.
+        if (self.rotation_angle > std.math.tau) {
+            self.rotation_angle -= std.math.tau;
+        }
 
         // Log mouse position changes for debug verification.
         // Only log when position changes significantly to avoid spam.
@@ -513,6 +529,33 @@ pub const App = struct {
             .{ Color.blue, Color.blue, Color.blue },
         );
 
+        // Animated rotating triangle - demonstrates smooth vsync rendering.
+        // Uses delta_time-based rotation to verify frame-rate independent animation.
+        // Positioned in the upper-left area to avoid overlap with other elements.
+        const rotating_center_x: f32 = 80.0;
+        const rotating_center_y: f32 = 100.0;
+        const rotating_radius: f32 = 35.0;
+
+        // Calculate vertices for an equilateral triangle rotated by rotation_angle.
+        // Each vertex is 120 degrees (2*pi/3) apart on a circle centered at (rotating_center_x, rotating_center_y).
+        var rotating_vertices: [3][2]f32 = undefined;
+        for (0..3) |i| {
+            const vertex_angle = self.rotation_angle + @as(f32, @floatFromInt(i)) * (std.math.tau / 3.0);
+            rotating_vertices[i] = .{
+                rotating_center_x + rotating_radius * @cos(vertex_angle),
+                rotating_center_y + rotating_radius * @sin(vertex_angle),
+            };
+        }
+
+        renderer.queueTriangle(
+            rotating_vertices,
+            .{
+                Color.fromHex(0x00FF88), // Bright green
+                Color.fromHex(0x00AAFF), // Bright cyan
+                Color.fromHex(0xFF00AA), // Bright magenta
+            },
+        );
+
         // Interactive triangle - moves to click position.
         // Demonstrates input handling: left-click moves this triangle to the cursor location.
         // Drawn last so it appears on top of other elements.
@@ -549,6 +592,7 @@ test "App init and deinit" {
 
     try std.testing.expect(app.isRunning());
     try std.testing.expectEqual(@as(u64, 0), app.getFrameCount());
+    try std.testing.expectEqual(@as(f32, 0.0), app.rotation_angle);
 }
 
 test "App update increments frame count" {
@@ -647,4 +691,33 @@ test "Triangle does not move on right or middle button press" {
     app.update(0.016, .{ .x = 100.0, .y = 100.0, .left_pressed = false, .right_pressed = false, .middle_pressed = true });
     try std.testing.expectEqual(@as(f32, 200.0), app.triangle_position[0]);
     try std.testing.expectEqual(@as(f32, 150.0), app.triangle_position[1]);
+}
+
+test "Rotation angle updates with delta time" {
+    var app = App.init(std.testing.allocator);
+    defer app.deinit();
+
+    // Initial rotation should be 0
+    try std.testing.expectEqual(@as(f32, 0.0), app.rotation_angle);
+
+    const mouse_state: MouseState = .{
+        .x = 0.0,
+        .y = 0.0,
+        .left_pressed = false,
+        .right_pressed = false,
+        .middle_pressed = false,
+    };
+
+    // After 1 second at rotation_speed = tau/4, angle should be ~1.57 radians (90 degrees)
+    app.update(1.0, mouse_state);
+    const expected_angle = std.math.tau / 4.0;
+    try std.testing.expectApproxEqAbs(expected_angle, app.rotation_angle, 0.001);
+
+    // After another 3 seconds (total 4 seconds), should have wrapped around
+    // 4 seconds * tau/4 = tau radians = one full rotation, wraps to ~0
+    app.update(1.0, mouse_state);
+    app.update(1.0, mouse_state);
+    app.update(1.0, mouse_state);
+    // Should be close to tau, which then wraps to ~0
+    try std.testing.expect(app.rotation_angle < std.math.tau);
 }
