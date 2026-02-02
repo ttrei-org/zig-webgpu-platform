@@ -68,6 +68,130 @@ fn wasmLogFn(
     _ = args;
 }
 
+/// Custom panic namespace for WASM builds.
+/// The default panic handler uses Thread.getCurrentId() and stderr which are not supported
+/// on emscripten. This provides a minimal panic namespace that works in the browser.
+///
+/// When a panic occurs, this handler will:
+/// 1. Trap (abort execution via unreachable)
+/// The browser's developer tools can catch this and show a stack trace.
+///
+/// In the future, this could be enhanced to call a JavaScript console.error() function
+/// via an imported JS function to display the panic message before aborting.
+///
+/// This is a panic namespace (type) not a function, following the modern Zig API.
+/// The namespace provides all the panic entry points that the compiler expects.
+pub const panic = if (is_wasm) WasmPanic else std.debug.FullPanic(std.debug.defaultPanic);
+
+/// Minimal panic namespace for WASM that just traps without trying to use
+/// stderr or Thread (which don't work on wasm32-emscripten).
+/// Function signatures match std/debug/simple_panic.zig exactly.
+const WasmPanic = struct {
+    pub fn call(_: []const u8, _: ?usize) noreturn {
+        @trap();
+    }
+
+    pub fn sentinelMismatch(expected: anytype, _: @TypeOf(expected)) noreturn {
+        @trap();
+    }
+
+    pub fn unwrapError(_: anyerror) noreturn {
+        @trap();
+    }
+
+    pub fn outOfBounds(_: usize, _: usize) noreturn {
+        @trap();
+    }
+
+    pub fn startGreaterThanEnd(_: usize, _: usize) noreturn {
+        @trap();
+    }
+
+    pub fn inactiveUnionField(active: anytype, _: @TypeOf(active)) noreturn {
+        @trap();
+    }
+
+    pub fn sliceCastLenRemainder(_: usize) noreturn {
+        @trap();
+    }
+
+    pub fn reachedUnreachable() noreturn {
+        @trap();
+    }
+
+    pub fn unwrapNull() noreturn {
+        @trap();
+    }
+
+    pub fn castToNull() noreturn {
+        @trap();
+    }
+
+    pub fn incorrectAlignment() noreturn {
+        @trap();
+    }
+
+    pub fn invalidErrorCode() noreturn {
+        @trap();
+    }
+
+    pub fn integerOutOfBounds() noreturn {
+        @trap();
+    }
+
+    pub fn integerOverflow() noreturn {
+        @trap();
+    }
+
+    pub fn shlOverflow() noreturn {
+        @trap();
+    }
+
+    pub fn shrOverflow() noreturn {
+        @trap();
+    }
+
+    pub fn divideByZero() noreturn {
+        @trap();
+    }
+
+    pub fn exactDivisionRemainder() noreturn {
+        @trap();
+    }
+
+    pub fn integerPartOutOfBounds() noreturn {
+        @trap();
+    }
+
+    pub fn corruptSwitch() noreturn {
+        @trap();
+    }
+
+    pub fn shiftRhsTooBig() noreturn {
+        @trap();
+    }
+
+    pub fn invalidEnumValue() noreturn {
+        @trap();
+    }
+
+    pub fn forLenMismatch() noreturn {
+        @trap();
+    }
+
+    pub fn copyLenMismatch() noreturn {
+        @trap();
+    }
+
+    pub fn memcpyAlias() noreturn {
+        @trap();
+    }
+
+    pub fn noreturnReturned() noreturn {
+        @trap();
+    }
+};
+
 // Export zgpu types for use in other modules
 pub const GraphicsContext = zgpu.GraphicsContext;
 
@@ -349,8 +473,8 @@ fn runHeadless(config: Config) void {
 /// These are only compiled for WASM targets to avoid importing web.zig on native builds.
 const wasm_exports = if (is_wasm) struct {
     /// Web platform module.
+    /// Also provides emscripten bindings without libc dependency.
     const web = @import("platform/web.zig");
-    const em = std.os.emscripten;
 
     /// Static storage for global app state.
     /// Using static variables because emscripten_set_main_loop with simulate_infinite_loop=1
@@ -376,7 +500,7 @@ const wasm_exports = if (is_wasm) struct {
         };
 
         // Calculate delta time from last frame
-        const current_time = em.emscripten_get_now();
+        const current_time = web.emscripten.emscripten_get_now();
         var delta_time: f32 = @floatCast((current_time - state.last_frame_time) / 1000.0);
         state.last_frame_time = current_time;
 
@@ -429,7 +553,7 @@ const wasm_exports = if (is_wasm) struct {
         // Check if quit was requested or app stopped running
         if (state.platform.shouldClose() or !state.app.isRunning()) {
             log.info("quit requested, cancelling main loop", .{});
-            em.emscripten_cancel_main_loop();
+            web.emscripten.emscripten_cancel_main_loop();
         }
     }
 
@@ -458,7 +582,7 @@ const wasm_exports = if (is_wasm) struct {
             .platform = &static_platform,
             .app = &static_app,
             .renderer = null, // Set later via web.setGlobalRenderer() when WebGPU is ready
-            .last_frame_time = em.emscripten_get_now(),
+            .last_frame_time = web.emscripten.emscripten_get_now(),
             .render_target = null, // Set later via web.setGlobalRenderTarget() when WebGPU is ready
         };
 
@@ -479,7 +603,7 @@ const wasm_exports = if (is_wasm) struct {
         // Note: With simulate_infinite_loop=1, this function never returns.
         // The platform and app state are stored in static variables and accessed
         // via global_app_state pointer from the callback.
-        em.emscripten_set_main_loop(mainLoopCallback, 0, 1);
+        web.emscripten.emscripten_set_main_loop(mainLoopCallback, 0, 1);
 
         // This line is never reached because simulate_infinite_loop=1
         log.info("wasm_main: main loop exited (unexpected)", .{});

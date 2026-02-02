@@ -29,44 +29,67 @@ comptime {
 /// These are provided by the browser runtime and declared as external symbols
 /// that will be linked at WASM instantiation time.
 ///
-/// Core Emscripten runtime functions are available via std.os.emscripten.
-/// HTML5 event APIs (mouse, keyboard, etc.) are defined here as they are not
-/// part of Zig's standard library.
-const emscripten = struct {
-    // Re-export core runtime functions from std.os.emscripten for convenience
-    const std_em = std.os.emscripten;
+/// IMPORTANT: We declare our own Emscripten bindings here instead of using
+/// std.os.emscripten because the standard library's version uses `extern "c"`
+/// which requires libc to be linked. Zig cannot provide libc for wasm32-emscripten
+/// targets (that requires the Emscripten SDK). By using `extern` without "c",
+/// these become WASM imports that are resolved at module instantiation time
+/// by the JavaScript environment.
+///
+/// This struct is public so main.zig can access the emscripten functions
+/// through web.emscripten.* for the main loop setup.
+pub const emscripten = struct {
+    // =========================================================================
+    // Core Emscripten Runtime Functions
+    // These match the signatures in emscripten.h but use `extern` instead of
+    // `extern "c"` to avoid libc dependency.
+    // =========================================================================
 
-    /// Main loop callback function type.
-    pub const em_callback_func = std_em.em_callback_func;
+    /// Main loop callback function type (no context).
+    pub const em_callback_func = *const fn () callconv(.c) void;
 
-    /// Main loop callback with user data.
-    pub const em_arg_callback_func = std_em.em_arg_callback_func;
+    /// Main loop callback function type (with user data context).
+    pub const em_arg_callback_func = *const fn (?*anyopaque) callconv(.c) void;
 
     /// Set the main loop callback. The browser calls this each frame.
+    /// @param callback: Function to call each frame
     /// @param fps: Target FPS (0 = use requestAnimationFrame)
     /// @param simulate_infinite_loop: If 1, function doesn't return
-    pub const emscripten_set_main_loop = std_em.emscripten_set_main_loop;
+    pub extern fn emscripten_set_main_loop(
+        callback: em_callback_func,
+        fps: c_int,
+        simulate_infinite_loop: c_int,
+    ) void;
 
     /// Set main loop with user data pointer passed to callback.
-    pub const emscripten_set_main_loop_arg = std_em.emscripten_set_main_loop_arg;
+    pub extern fn emscripten_set_main_loop_arg(
+        callback: em_arg_callback_func,
+        arg: ?*anyopaque,
+        fps: c_int,
+        simulate_infinite_loop: c_int,
+    ) void;
 
     /// Cancel the main loop.
-    pub const emscripten_cancel_main_loop = std_em.emscripten_cancel_main_loop;
+    pub extern fn emscripten_cancel_main_loop() void;
 
     /// Get canvas size (deprecated but still available).
-    pub const emscripten_get_canvas_size = std_em.emscripten_get_canvas_size;
+    pub extern fn emscripten_get_canvas_size(
+        width: *c_int,
+        height: *c_int,
+        is_fullscreen: *c_int,
+    ) void;
 
     /// Set canvas size (deprecated but still available).
-    pub const emscripten_set_canvas_size = std_em.emscripten_set_canvas_size;
+    pub extern fn emscripten_set_canvas_size(width: c_int, height: c_int) void;
 
     /// Get device pixel ratio for high-DPI displays.
-    pub const emscripten_get_device_pixel_ratio = std_em.emscripten_get_device_pixel_ratio;
+    pub extern fn emscripten_get_device_pixel_ratio() f64;
 
     /// Get high-resolution timestamp in milliseconds.
-    pub const emscripten_get_now = std_em.emscripten_get_now;
+    pub extern fn emscripten_get_now() f64;
 
     /// Get screen dimensions.
-    pub const emscripten_get_screen_size = std_em.emscripten_get_screen_size;
+    pub extern fn emscripten_get_screen_size(width: *c_int, height: *c_int) void;
 
     // =========================================================================
     // HTML5 Event API Types and Functions
@@ -201,7 +224,7 @@ const emscripten = struct {
     // =========================================================================
 
     /// Register a callback for mouse click events on a target element.
-    pub extern "c" fn emscripten_set_click_callback_on_thread(
+    pub extern fn emscripten_set_click_callback_on_thread(
         target: [*:0]const u8,
         user_data: ?*anyopaque,
         use_capture: bool,
@@ -210,7 +233,7 @@ const emscripten = struct {
     ) EMSCRIPTEN_RESULT;
 
     /// Register a callback for mouse down events.
-    pub extern "c" fn emscripten_set_mousedown_callback_on_thread(
+    pub extern fn emscripten_set_mousedown_callback_on_thread(
         target: [*:0]const u8,
         user_data: ?*anyopaque,
         use_capture: bool,
@@ -219,7 +242,7 @@ const emscripten = struct {
     ) EMSCRIPTEN_RESULT;
 
     /// Register a callback for mouse up events.
-    pub extern "c" fn emscripten_set_mouseup_callback_on_thread(
+    pub extern fn emscripten_set_mouseup_callback_on_thread(
         target: [*:0]const u8,
         user_data: ?*anyopaque,
         use_capture: bool,
@@ -228,7 +251,7 @@ const emscripten = struct {
     ) EMSCRIPTEN_RESULT;
 
     /// Register a callback for mouse move events.
-    pub extern "c" fn emscripten_set_mousemove_callback_on_thread(
+    pub extern fn emscripten_set_mousemove_callback_on_thread(
         target: [*:0]const u8,
         user_data: ?*anyopaque,
         use_capture: bool,
@@ -237,7 +260,7 @@ const emscripten = struct {
     ) EMSCRIPTEN_RESULT;
 
     /// Register a callback for mouse enter events.
-    pub extern "c" fn emscripten_set_mouseenter_callback_on_thread(
+    pub extern fn emscripten_set_mouseenter_callback_on_thread(
         target: [*:0]const u8,
         user_data: ?*anyopaque,
         use_capture: bool,
@@ -246,7 +269,7 @@ const emscripten = struct {
     ) EMSCRIPTEN_RESULT;
 
     /// Register a callback for mouse leave events.
-    pub extern "c" fn emscripten_set_mouseleave_callback_on_thread(
+    pub extern fn emscripten_set_mouseleave_callback_on_thread(
         target: [*:0]const u8,
         user_data: ?*anyopaque,
         use_capture: bool,
@@ -259,7 +282,7 @@ const emscripten = struct {
     // =========================================================================
 
     /// Register a callback for key press events.
-    pub extern "c" fn emscripten_set_keypress_callback_on_thread(
+    pub extern fn emscripten_set_keypress_callback_on_thread(
         target: [*:0]const u8,
         user_data: ?*anyopaque,
         use_capture: bool,
@@ -268,7 +291,7 @@ const emscripten = struct {
     ) EMSCRIPTEN_RESULT;
 
     /// Register a callback for key down events.
-    pub extern "c" fn emscripten_set_keydown_callback_on_thread(
+    pub extern fn emscripten_set_keydown_callback_on_thread(
         target: [*:0]const u8,
         user_data: ?*anyopaque,
         use_capture: bool,
@@ -277,7 +300,7 @@ const emscripten = struct {
     ) EMSCRIPTEN_RESULT;
 
     /// Register a callback for key up events.
-    pub extern "c" fn emscripten_set_keyup_callback_on_thread(
+    pub extern fn emscripten_set_keyup_callback_on_thread(
         target: [*:0]const u8,
         user_data: ?*anyopaque,
         use_capture: bool,
@@ -290,7 +313,7 @@ const emscripten = struct {
     // =========================================================================
 
     /// Register a callback for mouse wheel events.
-    pub extern "c" fn emscripten_set_wheel_callback_on_thread(
+    pub extern fn emscripten_set_wheel_callback_on_thread(
         target: [*:0]const u8,
         user_data: ?*anyopaque,
         use_capture: bool,
@@ -303,7 +326,7 @@ const emscripten = struct {
     // =========================================================================
 
     /// Register a callback for window/element resize events.
-    pub extern "c" fn emscripten_set_resize_callback_on_thread(
+    pub extern fn emscripten_set_resize_callback_on_thread(
         target: [*:0]const u8,
         user_data: ?*anyopaque,
         use_capture: bool,
@@ -319,28 +342,28 @@ const emscripten = struct {
     /// @param target: CSS selector for the canvas element (e.g., "#canvas")
     /// @param width: Output parameter for width
     /// @param height: Output parameter for height
-    pub extern "c" fn emscripten_get_canvas_element_size(
+    pub extern fn emscripten_get_canvas_element_size(
         target: [*:0]const u8,
         width: *c_int,
         height: *c_int,
     ) EMSCRIPTEN_RESULT;
 
     /// Set the size of a canvas element in CSS pixels.
-    pub extern "c" fn emscripten_set_canvas_element_size(
+    pub extern fn emscripten_set_canvas_element_size(
         target: [*:0]const u8,
         width: c_int,
         height: c_int,
     ) EMSCRIPTEN_RESULT;
 
     /// Get the CSS size of an element.
-    pub extern "c" fn emscripten_get_element_css_size(
+    pub extern fn emscripten_get_element_css_size(
         target: [*:0]const u8,
         width: *f64,
         height: *f64,
     ) EMSCRIPTEN_RESULT;
 
     /// Set the CSS size of an element.
-    pub extern "c" fn emscripten_set_element_css_size(
+    pub extern fn emscripten_set_element_css_size(
         target: [*:0]const u8,
         width: f64,
         height: f64,
@@ -351,7 +374,7 @@ const emscripten = struct {
     // =========================================================================
 
     /// Remove all registered HTML5 event listeners.
-    pub extern "c" fn emscripten_html5_remove_all_event_listeners() void;
+    pub extern fn emscripten_html5_remove_all_event_listeners() void;
 
     // =========================================================================
     // Convenience Constants for Event Targets

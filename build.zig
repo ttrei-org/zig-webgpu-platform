@@ -109,8 +109,8 @@ pub fn build(b: *std.Build) void {
 
         // Note: We do NOT link libc for WASM builds.
         // Zig doesn't have libc support for wasm32-emscripten targets.
-        // Instead, we import the required functions from the JavaScript environment.
-        // The extern "c" functions in std.os.emscripten are imported, not linked.
+        // Instead, we use custom emscripten bindings in web.zig that don't require libc.
+        // The extern functions are imported from the JavaScript environment at runtime.
 
         // Export the wasm_main entry point which is explicitly defined for WASM builds.
         // We don't export _start/main to avoid triggering the standard library's
