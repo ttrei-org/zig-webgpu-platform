@@ -46,6 +46,11 @@ pub const App = struct {
     /// button just released (!current.left && prev.left), position delta.
     prev_mouse_state: MouseState,
 
+    /// Position of the interactive triangle (x, y in screen coordinates).
+    /// Updated when the user clicks the left mouse button.
+    /// Initially centered in the window (200, 150 for 400x300 window).
+    triangle_position: [2]f32,
+
     /// Initialize the application with the given allocator.
     /// The allocator is stored for any dynamic allocations the app may need.
     pub fn init(allocator: std.mem.Allocator) Self {
@@ -63,6 +68,7 @@ pub const App = struct {
             .frame_count = 0,
             .mouse_state = initial_mouse_state,
             .prev_mouse_state = initial_mouse_state,
+            .triangle_position = .{ 200.0, 150.0 }, // Center of 400x300 window
         };
     }
 
@@ -119,6 +125,13 @@ pub const App = struct {
         if (mouse_state.middle_pressed != self.prev_mouse_state.middle_pressed) {
             const action = if (mouse_state.middle_pressed) "pressed" else "released";
             log.info("middle button {s}", .{action});
+        }
+
+        // Move the interactive triangle to click position.
+        // Detects left button "just pressed" (transition from released to pressed).
+        if (MouseState.buttonJustPressed(mouse_state, self.prev_mouse_state, .left)) {
+            self.triangle_position = .{ mouse_state.x, mouse_state.y };
+            log.info("triangle moved to ({d:.1}, {d:.1})", .{ mouse_state.x, mouse_state.y });
         }
 
         // Store current state for next frame comparison
@@ -498,6 +511,28 @@ pub const App = struct {
                 .{ overlap_base_x + 2.0 * overlap_offset + overlap_size / 2.0, overlap_base_y }, // Top
             },
             .{ Color.blue, Color.blue, Color.blue },
+        );
+
+        // Interactive triangle - moves to click position.
+        // Demonstrates input handling: left-click moves this triangle to the cursor location.
+        // Drawn last so it appears on top of other elements.
+        const tri_x = self.triangle_position[0];
+        const tri_y = self.triangle_position[1];
+        const tri_size: f32 = 30.0; // Half-width of the triangle base
+
+        // Equilateral-ish triangle centered at the stored position.
+        // Apex points upward, base at the bottom.
+        renderer.queueTriangle(
+            .{
+                .{ tri_x, tri_y - tri_size }, // Top apex
+                .{ tri_x - tri_size, tri_y + tri_size * 0.6 }, // Bottom-left
+                .{ tri_x + tri_size, tri_y + tri_size * 0.6 }, // Bottom-right
+            },
+            .{
+                Color.fromHex(0xFFD700), // Gold apex
+                Color.fromHex(0xFF8C00), // Dark orange bottom-left
+                Color.fromHex(0xFF8C00), // Dark orange bottom-right
+            },
         );
     }
 
