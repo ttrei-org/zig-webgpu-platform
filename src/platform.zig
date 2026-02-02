@@ -17,6 +17,36 @@ pub const MouseButton = enum {
     middle,
 };
 
+/// Platform event representing user input or window state changes.
+///
+/// Events are returned from pollEvents() for the main loop to process.
+/// This tagged union is designed to be extensible for additional event
+/// types such as keyboard input.
+pub const PlatformEvent = union(enum) {
+    /// No event available (used when polling returns nothing).
+    none,
+
+    /// Window close or application exit request.
+    /// The main loop should terminate when receiving this event.
+    quit,
+
+    /// Mouse cursor movement event.
+    mouse_move: struct {
+        /// X position in screen coordinates (pixels from left edge).
+        x: f32,
+        /// Y position in screen coordinates (pixels from top edge).
+        y: f32,
+    },
+
+    /// Mouse button press or release event.
+    mouse_button: struct {
+        /// Which button was pressed or released.
+        button: MouseButton,
+        /// True if the button was pressed, false if released.
+        pressed: bool,
+    },
+};
+
 /// Mouse state containing position and button states.
 pub const MouseState = struct {
     /// X position in screen coordinates (pixels from left edge).
