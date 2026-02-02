@@ -13,6 +13,8 @@ const zgpu = @import("zgpu");
 const zglfw = @import("zglfw");
 
 const App = @import("app.zig").App;
+const platform_mod = @import("platform.zig");
+const Platform = platform_mod.Platform;
 
 /// Frames per second cap for delta time calculation.
 /// If a frame takes longer than this, delta_time is capped to prevent
@@ -89,6 +91,11 @@ pub fn main() void {
     var app = App.init(std.heap.page_allocator);
     defer app.deinit();
 
+    // Get the platform abstraction interface for platform-agnostic main loop.
+    // The Platform interface provides shouldQuit(), pollEvents(), getMouseState(),
+    // and isKeyPressed() methods that work across desktop, web, and headless backends.
+    var plat = platform.platform();
+
     log.info("entering main loop", .{});
 
     // Track if this is the first frame (for --screenshot mode)
@@ -97,8 +104,12 @@ pub fn main() void {
     // Track time for delta calculation
     var last_time: f64 = zglfw.getTime();
 
-    // Main loop: poll events and render until window close or app requests quit
-    while (!platform.shouldClose() and app.isRunning()) {
+    // Main loop: poll events and render until platform requests quit or app stops.
+    // Uses the Platform abstraction for portable event handling across backends.
+    while (!plat.shouldQuit() and app.isRunning()) {
+        // Poll platform events (input, window events, etc.)
+        plat.pollEvents();
+
         // Calculate delta time
         const current_time = zglfw.getTime();
         var delta_time: f32 = @floatCast(current_time - last_time);
@@ -109,18 +120,16 @@ pub fn main() void {
             delta_time = MAX_DELTA_TIME;
         }
 
-        platform.pollEvents();
-
-        // Exit on Escape key
-        if (platform.isGlfwKeyPressed(zglfw.Key.escape)) {
+        // Exit on Escape key (using platform-agnostic key check)
+        if (plat.isKeyPressed(.escape)) {
             app.requestQuit();
             continue;
         }
 
-        // Get mouse state for debug display
-        const mouse_state = platform.getMouseState();
+        // Get mouse state for input handling
+        const mouse_state = plat.getMouseState();
 
-        // Update application state with full mouse state (position and buttons)
+        // Update application state with delta time and input
         app.update(delta_time, mouse_state);
 
         // Begin frame - get swap chain texture and command encoder
