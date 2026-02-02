@@ -7,6 +7,9 @@
 const std = @import("std");
 const zglfw = @import("zglfw");
 
+const main = @import("../main.zig");
+const Config = main.Config;
+
 const platform_mod = @import("../platform.zig");
 const Platform = platform_mod.Platform;
 const MouseState = platform_mod.MouseState;
@@ -38,8 +41,18 @@ pub const DesktopPlatform = struct {
     /// Initialize the desktop platform.
     /// Initializes GLFW and sets window hints for WebGPU (no OpenGL context).
     /// Returns an error if GLFW initialization fails.
-    pub fn init(allocator: std.mem.Allocator) Error!Self {
+    ///
+    /// The config parameter enables runtime platform selection. If config.headless
+    /// is true, a warning is logged since desktop platform requires a display.
+    /// For headless operation, use the headless platform instead.
+    pub fn init(allocator: std.mem.Allocator, config: Config) Error!Self {
         log.debug("initializing desktop platform", .{});
+
+        // Warn if headless mode is requested - desktop platform requires a display.
+        // This allows the application to detect misconfiguration early.
+        if (config.headless) {
+            log.warn("headless mode requested but desktop platform requires a display; use headless platform for automated testing", .{});
+        }
 
         zglfw.init() catch |err| {
             log.err("failed to initialize GLFW: {}", .{err});
@@ -285,7 +298,8 @@ pub const DesktopPlatform = struct {
 
 test "DesktopPlatform init and deinit" {
     // GLFW initialization may fail on headless systems (e.g., CI without display)
-    var desktop_platform = DesktopPlatform.init(std.testing.allocator) catch |err| {
+    const config: Config = .{};
+    var desktop_platform = DesktopPlatform.init(std.testing.allocator, config) catch |err| {
         // Skip test if GLFW can't initialize (no display available)
         log.warn("skipping test: GLFW init failed with {}", .{err});
         return;
@@ -301,7 +315,8 @@ test "DesktopPlatform init and deinit" {
 
 test "DesktopPlatform platform interface" {
     // GLFW initialization may fail on headless systems (e.g., CI without display)
-    var desktop_platform = DesktopPlatform.init(std.testing.allocator) catch |err| {
+    const config: Config = .{};
+    var desktop_platform = DesktopPlatform.init(std.testing.allocator, config) catch |err| {
         // Skip test if GLFW can't initialize (no display available)
         log.warn("skipping test: GLFW init failed with {}", .{err});
         return;

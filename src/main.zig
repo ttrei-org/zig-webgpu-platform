@@ -96,8 +96,9 @@ pub fn main() void {
     const config = parseArgs(std.heap.page_allocator);
     log.info("config: headless={}, {}x{}", .{ config.headless, config.width, config.height });
 
-    // Initialize platform
-    var platform = desktop.DesktopPlatform.init(std.heap.page_allocator) catch |err| {
+    // Initialize platform with config for runtime platform selection.
+    // Desktop platform warns if headless is requested (use headless platform instead).
+    var platform = desktop.DesktopPlatform.init(std.heap.page_allocator, config) catch |err| {
         log.err("failed to initialize platform: {}", .{err});
         return;
     };
