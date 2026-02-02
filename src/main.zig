@@ -42,9 +42,16 @@ const Options = struct {
 };
 
 /// Parse command-line arguments.
-fn parseArgs() Options {
+/// Uses argsWithAllocator for cross-platform compatibility, then deallocates
+/// the iterator's internal buffers after parsing is complete.
+fn parseArgs(allocator: std.mem.Allocator) Options {
     var opts: Options = .{};
-    var args = std.process.args();
+    var args = std.process.argsWithAllocator(allocator) catch |err| {
+        log.warn("failed to get command line arguments: {}", .{err});
+        return opts;
+    };
+    defer args.deinit();
+
     _ = args.skip(); // Skip program name
 
     while (args.next()) |arg| {
@@ -59,8 +66,8 @@ fn parseArgs() Options {
 pub fn main() void {
     log.info("zig-gui-experiment starting", .{});
 
-    // Parse command-line arguments
-    const opts = parseArgs();
+    // Parse command-line arguments using page_allocator for cross-platform compatibility
+    const opts = parseArgs(std.heap.page_allocator);
 
     // Initialize platform
     var platform = desktop.DesktopPlatform.init(std.heap.page_allocator) catch |err| {
