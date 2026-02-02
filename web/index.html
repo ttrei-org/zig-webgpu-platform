@@ -41,17 +41,15 @@
 <body>
     <canvas id="canvas" width="800" height="600"></canvas>
 
+    <!-- Load the Emscripten-generated JavaScript module -->
+    <script type="module" src="./zig_gui_experiment.js"></script>
     <script type="module">
         // Zig GUI Experiment - WebGPU WASM Loader
-        // This script loads the WASM module and initializes WebGPU rendering.
+        // This script imports the generated JS module and initializes the application.
+
+        import { init } from "./zig_gui_experiment.js";
 
         async function main() {
-            // Check for WebGPU support
-            if (!navigator.gpu) {
-                showError("WebGPU is not supported in this browser.\n\nPlease use Chrome 113+, Edge 113+, or Firefox Nightly with WebGPU enabled.");
-                return;
-            }
-
             const canvas = document.getElementById("canvas");
             if (!canvas) {
                 showError("Canvas element not found");
@@ -68,20 +66,9 @@
             window.addEventListener("resize", resizeCanvas);
 
             try {
-                // Request WebGPU adapter and device
-                const adapter = await navigator.gpu.requestAdapter({
-                    powerPreference: "high-performance"
-                });
-                if (!adapter) {
-                    showError("Failed to get WebGPU adapter.\n\nYour GPU may not support WebGPU.");
-                    return;
-                }
-
-                const device = await adapter.requestDevice();
-                if (!device) {
-                    showError("Failed to get WebGPU device.");
-                    return;
-                }
+                // Initialize using the generated JS module
+                // The init() function handles WebGPU setup and WASM loading
+                const { instance, device, adapter, exports } = await init();
 
                 // Configure canvas context for WebGPU
                 const context = canvas.getContext("webgpu");
@@ -101,33 +88,10 @@
                 console.log("Canvas size:", canvas.width, "x", canvas.height);
                 console.log("Preferred format:", format);
 
-                // Load and instantiate the WASM module
-                const wasmPath = "zig_gui_experiment.wasm";
-                const response = await fetch(wasmPath);
-                if (!response.ok) {
-                    showError(`Failed to fetch WASM module: ${response.status} ${response.statusText}\n\nMake sure to build with: zig build -Dtarget=wasm32-emscripten`);
-                    return;
-                }
-
-                const wasmBytes = await response.arrayBuffer();
-                console.log("WASM module loaded:", wasmBytes.byteLength, "bytes");
-
-                // Import object for WASM instantiation
-                // The Zig WASM module exports memory and imports browser APIs via Emscripten
-                const importObject = {
-                    env: {
-                        // Placeholder for environment imports
-                        // Emscripten-compiled WASM may require additional imports
-                    }
-                };
-
-                const { instance } = await WebAssembly.instantiate(wasmBytes, importObject);
-                console.log("WASM module instantiated");
-
                 // Call the WASM entry point
-                if (instance.exports.wasm_main) {
+                if (exports.wasm_main) {
                     console.log("Calling wasm_main...");
-                    instance.exports.wasm_main();
+                    exports.wasm_main();
                 } else {
                     console.warn("wasm_main export not found in WASM module");
                 }
