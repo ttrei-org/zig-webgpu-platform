@@ -799,6 +799,77 @@ pub fn createSurfaceFromCanvas(
     return surface;
 }
 
+/// Create a swap chain from the canvas WebGPU context.
+///
+/// This function configures the swap chain (GPUCanvasContext.configure) to connect
+/// the WebGPU device to the canvas for presenting frames. The swap chain manages
+/// the textures used for double/triple buffering and handles presentation to the
+/// browser's compositor.
+///
+/// Parameters:
+/// - device: WebGPU device to create the swap chain with. Must be a valid device
+///   obtained from requestDeviceSync() or an async device request.
+/// - surface: WebGPU surface created from the canvas via createSurfaceFromCanvas().
+///   The surface represents the canvas element as a render target.
+/// - width: Width of the swap chain textures in pixels. Should match the canvas
+///   element's backing store size (CSS size * device pixel ratio for high-DPI).
+/// - height: Height of the swap chain textures in pixels.
+///
+/// Returns:
+/// - A configured SwapChain for rendering to the canvas, or null if creation failed.
+///
+/// Configuration details:
+/// - Format: bgra8_unorm - standard format for web, matches browser compositor expectations
+/// - Usage: render_attachment - enables use as a render pass color attachment
+/// - Present mode: fifo - VSync enabled for smooth presentation
+/// - Alpha mode: Opaque (implicit) - canvas background shows through
+///
+/// Example:
+/// ```zig
+/// const surface = createSurfaceFromCanvas(instance, "#canvas");
+/// const device = requestDeviceSync(adapter);
+/// const swap_chain = createSwapChain(device.?, surface.?, 800, 600);
+/// if (swap_chain) |sc| {
+///     // Use swap_chain.getCurrentTextureView() in render loop
+/// }
+/// ```
+///
+/// Note: The swap chain must be recreated when the canvas size changes.
+/// Monitor for resize events and call createSwapChain with new dimensions.
+pub fn createSwapChain(
+    device: zgpu.wgpu.Device,
+    surface: zgpu.wgpu.Surface,
+    width: u32,
+    height: u32,
+) ?zgpu.wgpu.SwapChain {
+    log.info("creating swap chain for canvas: {}x{}", .{ width, height });
+
+    // Create swap chain with standard settings for browser 2D rendering.
+    // Configuration matches the desktop renderer settings for consistency.
+    const swap_chain = device.createSwapChain(
+        surface,
+        .{
+            .next_in_chain = null,
+            .label = "Web Canvas Swap Chain",
+            .usage = .{ .render_attachment = true },
+            .format = .bgra8_unorm, // Standard format for browser WebGPU
+            .width = width,
+            .height = height,
+            .present_mode = .fifo, // VSync enabled for smooth presentation
+        },
+    );
+
+    // Check if swap chain creation succeeded.
+    // A null/zero pointer indicates the browser failed to configure the canvas context.
+    if (@intFromPtr(swap_chain.ptr) == 0) {
+        log.err("failed to create swap chain for canvas (device or surface may be invalid)", .{});
+        return null;
+    }
+
+    log.info("WebGPU swap chain created successfully: {}x{}", .{ width, height });
+    return swap_chain;
+}
+
 /// Web platform for browser-based execution via Emscripten.
 /// Implements the Platform interface using browser APIs for input handling
 /// and canvas-based rendering.
