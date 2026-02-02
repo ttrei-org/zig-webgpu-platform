@@ -136,6 +136,30 @@ pub const Color = struct {
     pub fn rgba(r: f32, g: f32, b: f32, a: f32) Color {
         return .{ .r = r, .g = g, .b = b, .a = a };
     }
+
+    /// Create a Color from u8 RGB values (0-255 range).
+    /// Converts by dividing by 255.0. Alpha defaults to 1.0 (fully opaque).
+    /// Convenient for using common RGB notation like (255, 128, 0).
+    pub fn fromRgb8(r: u8, g: u8, b: u8) Color {
+        return .{
+            .r = @as(f32, @floatFromInt(r)) / 255.0,
+            .g = @as(f32, @floatFromInt(g)) / 255.0,
+            .b = @as(f32, @floatFromInt(b)) / 255.0,
+            .a = 1.0,
+        };
+    }
+
+    /// Create a Color from u8 RGBA values (0-255 range).
+    /// Converts by dividing by 255.0.
+    /// Convenient for using common RGBA notation like (255, 128, 0, 255).
+    pub fn fromRgba8(r: u8, g: u8, b: u8, a: u8) Color {
+        return .{
+            .r = @as(f32, @floatFromInt(r)) / 255.0,
+            .g = @as(f32, @floatFromInt(g)) / 255.0,
+            .b = @as(f32, @floatFromInt(b)) / 255.0,
+            .a = @as(f32, @floatFromInt(a)) / 255.0,
+        };
+    }
 };
 
 /// RGB vertex color type for GPU vertex attributes.
