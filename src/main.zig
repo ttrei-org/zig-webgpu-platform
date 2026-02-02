@@ -117,8 +117,11 @@ pub fn main() void {
             continue;
         }
 
-        // Update application state
-        app.update(delta_time);
+        // Get mouse state for debug display
+        const mouse_state = platform.getMouseState();
+
+        // Update application state with mouse position
+        app.update(delta_time, mouse_state.x, mouse_state.y);
 
         // Begin frame - get swap chain texture and command encoder
         const frame_state = renderer.beginFrame() catch |err| {

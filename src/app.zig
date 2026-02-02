@@ -35,6 +35,12 @@ pub const App = struct {
     /// Frame counter for diagnostics and timing.
     frame_count: u64,
 
+    /// Current mouse X position in screen coordinates.
+    mouse_x: f32,
+
+    /// Current mouse Y position in screen coordinates.
+    mouse_y: f32,
+
     /// Initialize the application with the given allocator.
     /// The allocator is stored for any dynamic allocations the app may need.
     pub fn init(allocator: std.mem.Allocator) Self {
@@ -43,6 +49,8 @@ pub const App = struct {
             .allocator = allocator,
             .running = true,
             .frame_count = 0,
+            .mouse_x = 0,
+            .mouse_y = 0,
         };
     }
 
@@ -72,9 +80,25 @@ pub const App = struct {
     /// Parameters:
     /// - delta_time: Time elapsed since last frame in seconds.
     ///   Used for frame-rate independent movement and animations.
-    pub fn update(self: *Self, delta_time: f32) void {
+    /// - mouse_x: Current mouse X position in screen coordinates.
+    /// - mouse_y: Current mouse Y position in screen coordinates.
+    pub fn update(self: *Self, delta_time: f32, mouse_x: f32, mouse_y: f32) void {
         _ = delta_time; // Currently unused, will be used for animations
         self.frame_count += 1;
+
+        // Log mouse position changes for debug verification.
+        // Only log when position changes significantly to avoid spam.
+        const prev_x = self.mouse_x;
+        const prev_y = self.mouse_y;
+        self.mouse_x = mouse_x;
+        self.mouse_y = mouse_y;
+
+        // Log every 60 frames (~1 second at 60 FPS) if position changed
+        if (self.frame_count % 60 == 0) {
+            if (@abs(mouse_x - prev_x) > 0.1 or @abs(mouse_y - prev_y) > 0.1) {
+                log.info("mouse position: ({d:.1}, {d:.1})", .{ mouse_x, mouse_y });
+            }
+        }
     }
 
     /// Called once per frame after update to queue draw commands.
@@ -85,8 +109,6 @@ pub const App = struct {
     /// Parameters:
     /// - renderer: Pointer to the Renderer for queuing draw commands.
     pub fn render(self: *const Self, renderer: *Renderer) void {
-        _ = self;
-
         // Static test pattern demonstrating the triangle API.
         // Creates a radial "starburst" pattern with triangles emanating from center,
         // plus corner accent triangles. Showcases Color constants and helpers.
@@ -320,6 +342,50 @@ pub const App = struct {
             .{ Color.magenta, Color.magenta, Color.magenta },
         );
 
+        // Mouse position debug display - visual crosshair at current mouse location.
+        // Verifies mouse position updates correctly with (0,0) at top-left,
+        // X increasing rightward, Y increasing downward.
+        const mouse_x = self.mouse_x;
+        const mouse_y = self.mouse_y;
+        const crosshair_size: f32 = 8.0;
+        const crosshair_thickness: f32 = 2.0;
+
+        // Horizontal bar of crosshair (two triangles forming a rectangle)
+        renderer.queueTriangle(
+            .{
+                .{ mouse_x - crosshair_size, mouse_y - crosshair_thickness },
+                .{ mouse_x + crosshair_size, mouse_y - crosshair_thickness },
+                .{ mouse_x + crosshair_size, mouse_y + crosshair_thickness },
+            },
+            .{ Color.white, Color.white, Color.white },
+        );
+        renderer.queueTriangle(
+            .{
+                .{ mouse_x - crosshair_size, mouse_y - crosshair_thickness },
+                .{ mouse_x + crosshair_size, mouse_y + crosshair_thickness },
+                .{ mouse_x - crosshair_size, mouse_y + crosshair_thickness },
+            },
+            .{ Color.white, Color.white, Color.white },
+        );
+
+        // Vertical bar of crosshair (two triangles forming a rectangle)
+        renderer.queueTriangle(
+            .{
+                .{ mouse_x - crosshair_thickness, mouse_y - crosshair_size },
+                .{ mouse_x + crosshair_thickness, mouse_y - crosshair_size },
+                .{ mouse_x + crosshair_thickness, mouse_y + crosshair_size },
+            },
+            .{ Color.white, Color.white, Color.white },
+        );
+        renderer.queueTriangle(
+            .{
+                .{ mouse_x - crosshair_thickness, mouse_y - crosshair_size },
+                .{ mouse_x + crosshair_thickness, mouse_y + crosshair_size },
+                .{ mouse_x - crosshair_thickness, mouse_y + crosshair_size },
+            },
+            .{ Color.white, Color.white, Color.white },
+        );
+
         // Z-order test: Overlapping triangles to verify painter's algorithm.
         // Since there is no depth buffer, draw order = depth order.
         // Later-drawn triangles should appear on top of earlier ones.
@@ -384,11 +450,11 @@ test "App update increments frame count" {
     var app = App.init(std.testing.allocator);
     defer app.deinit();
 
-    app.update(0.016); // ~60 FPS
+    app.update(0.016, 100.0, 50.0); // ~60 FPS with mouse at (100, 50)
     try std.testing.expectEqual(@as(u64, 1), app.getFrameCount());
 
-    app.update(0.016);
-    app.update(0.016);
+    app.update(0.016, 110.0, 60.0);
+    app.update(0.016, 120.0, 70.0);
     try std.testing.expectEqual(@as(u64, 3), app.getFrameCount());
 }
 
