@@ -320,17 +320,79 @@ fn runHeadless(config: Config) void {
     log.info("headless rendering complete after {} frames", .{frame_count});
 }
 
-/// WASM entry point for browser-based execution.
-/// Exported as 'wasm_main' and called from JavaScript after WASM module instantiation.
-/// Currently just validates that the module loaded - full WebGPU integration
-/// will be added in a future issue (requires browser's navigator.gpu API).
-export fn wasm_main() callconv(.c) void {
-    // For now, this is a placeholder that proves compilation works.
-    // Full web support requires:
-    // 1. JavaScript to provide WebGPU device via imports
-    // 2. Canvas element for rendering surface
-    // 3. Animation frame callback loop
-    // These will be implemented in a follow-up task.
+/// WASM-specific exports and implementations.
+/// These are only compiled for WASM targets to avoid importing web.zig on native builds.
+const wasm_exports = if (is_wasm) struct {
+    /// Web platform module.
+    const web = @import("platform/web.zig");
+    const em = std.os.emscripten;
+
+    /// Main loop callback for web platform.
+    /// Called by the browser each frame via emscripten_set_main_loop.
+    /// This function executes one iteration of the render loop.
+    ///
+    /// For now, this is a minimal stub that logs frame progress.
+    /// Full rendering requires WebGPU context from the browser (to be added in follow-up tasks).
+    fn mainLoopCallback() callconv(.c) void {
+        if (web.global_web_platform) |platform| {
+            // Poll for events (updates frame counter and processes browser events)
+            platform.pollEvents();
+
+            // Log progress occasionally (every 60 frames = ~1 second at 60 FPS)
+            if (platform.frame_count % 60 == 1) {
+                log.info("web frame {}", .{platform.frame_count});
+            }
+
+            // Check if quit was requested
+            if (platform.shouldClose()) {
+                log.info("quit requested, cancelling main loop", .{});
+                em.emscripten_cancel_main_loop();
+            }
+        } else {
+            // Platform not initialized - this shouldn't happen
+            log.warn("web main loop callback: platform not initialized", .{});
+        }
+    }
+
+    /// Entry point called from JavaScript.
+    /// Exported as 'wasm_main' and called from JavaScript after WASM module instantiation.
+    /// Uses emscripten_set_main_loop to integrate with the browser's requestAnimationFrame.
+    pub fn wasm_main() callconv(.c) void {
+        log.info("wasm_main: initializing web platform", .{});
+
+        // Initialize web platform
+        var platform = web.WebPlatform.init(std.heap.page_allocator);
+
+        // Set the global platform for JavaScript callbacks
+        web.setGlobalPlatform(&platform);
+
+        log.info("wasm_main: starting main loop with emscripten_set_main_loop", .{});
+
+        // Start the main loop using emscripten_set_main_loop.
+        // Parameters:
+        // - callback: Function to call each frame
+        // - fps: 0 means use requestAnimationFrame (vsync)
+        // - simulate_infinite_loop: 1 means the function doesn't return (required for WASM)
+        //
+        // This integrates with the browser's animation frame system. The callback
+        // will be called each frame by the browser, typically at 60 FPS.
+        //
+        // Note: With simulate_infinite_loop=1, this function never returns.
+        // The platform and any app state must either be static/global or passed via
+        // emscripten_set_main_loop_arg's user_data pointer (to be added in bd-13b).
+        em.emscripten_set_main_loop(mainLoopCallback, 0, 1);
+
+        // This line is never reached because simulate_infinite_loop=1
+        log.info("wasm_main: main loop exited (unexpected)", .{});
+    }
+} else struct {};
+
+// Export wasm_main for WASM builds.
+// The comptime export ensures the symbol is only created for WASM targets.
+comptime {
+    if (is_wasm) {
+        @export(&wasm_exports.wasm_main, .{ .name = "wasm_main" });
+    }
 }
 
 // For WASM builds targeting emscripten, we need to provide a _start symbol to prevent

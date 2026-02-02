@@ -793,7 +793,8 @@ pub const WebPlatform = struct {
 
 /// Global web platform instance for JavaScript callbacks.
 /// This is set when the web platform is initialized and used by exported functions.
-var global_web_platform: ?*WebPlatform = null;
+/// Public to allow access from the main loop callback in main.zig.
+pub var global_web_platform: ?*WebPlatform = null;
 
 /// Set the global web platform instance for JavaScript callbacks.
 /// Must be called after WebPlatform.init() to enable event handling.
