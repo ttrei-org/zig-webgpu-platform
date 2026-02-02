@@ -173,6 +173,13 @@ pub fn build(b: *std.Build) void {
             .{ .custom = "." },
             "zig_gui_experiment.js",
         ).step);
+
+        // Copy index.html from web/ to the web output directory
+        b.getInstallStep().dependOn(&b.addInstallFileWithDir(
+            b.path("web/index.html"),
+            .{ .custom = "." },
+            "index.html",
+        ).step);
     }
 
     const run_cmd = b.addRunArtifact(exe);
