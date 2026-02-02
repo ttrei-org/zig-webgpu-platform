@@ -488,6 +488,73 @@ const emscripten = struct {
 /// This matches the default canvas element created by Emscripten's shell HTML.
 const DEFAULT_CANVAS_SELECTOR: [*:0]const u8 = "#canvas";
 
+/// Import zgpu for WebGPU types.
+/// Used to create WebGPU surface from canvas element.
+const zgpu = @import("zgpu");
+
+/// Create a WebGPU surface from an HTML canvas element.
+///
+/// This function creates a WebGPU surface bound to the specified canvas element,
+/// enabling GPU rendering to the browser's canvas. The surface is the WebGPU
+/// equivalent of the rendering context obtained via `canvas.getContext('webgpu')`
+/// in JavaScript.
+///
+/// Parameters:
+/// - instance: WebGPU instance from which to create the surface.
+/// - canvas_selector: CSS selector for the target canvas (e.g., "#canvas").
+///   This selector is passed to the browser to identify which canvas element
+///   should receive the WebGPU rendering output.
+///
+/// Returns:
+/// - A WebGPU surface bound to the canvas, or null if creation failed.
+///
+/// Usage:
+/// ```zig
+/// const surface = createSurfaceFromCanvas(instance, "#canvas");
+/// if (surface) |s| {
+///     // Use surface for swap chain creation
+/// }
+/// ```
+///
+/// Note: This function is only available on web/WASM builds. On desktop,
+/// surfaces are created from native window handles (HWND, X11 Window, etc.)
+/// via a different code path in renderer.zig.
+pub fn createSurfaceFromCanvas(
+    instance: zgpu.wgpu.Instance,
+    canvas_selector: [*:0]const u8,
+) ?zgpu.wgpu.Surface {
+    // Create the canvas HTML selector descriptor.
+    // This tells WebGPU which canvas element to bind the surface to.
+    // The struct_type identifies this as a canvas selector descriptor
+    // in the chained descriptor pattern used by WebGPU.
+    var canvas_desc: zgpu.wgpu.SurfaceDescriptorFromCanvasHTMLSelector = .{
+        .chain = .{
+            .next = null,
+            .struct_type = .surface_descriptor_from_canvas_html_selector,
+        },
+        .selector = canvas_selector,
+    };
+
+    // Create the surface using the chained descriptor.
+    // The next_in_chain pointer connects to the canvas selector descriptor,
+    // allowing WebGPU to interpret the surface creation request correctly.
+    const surface = instance.createSurface(.{
+        .next_in_chain = @ptrCast(&canvas_desc.chain),
+        .label = "Web Canvas Surface",
+    });
+
+    // Check if surface creation succeeded.
+    // A null/zero pointer indicates the browser failed to create the surface
+    // (e.g., WebGPU not supported, canvas not found, or invalid selector).
+    if (@intFromPtr(surface.ptr) == 0) {
+        log.err("failed to create WebGPU surface from canvas '{s}'", .{canvas_selector});
+        return null;
+    }
+
+    log.info("WebGPU surface created from canvas '{s}'", .{canvas_selector});
+    return surface;
+}
+
 /// Web platform for browser-based execution via Emscripten.
 /// Implements the Platform interface using browser APIs for input handling
 /// and canvas-based rendering.
@@ -723,6 +790,31 @@ pub const WebPlatform = struct {
     /// Get the device pixel ratio for high-DPI scaling.
     pub fn getPixelRatio(self: *const Self) f64 {
         return self.pixel_ratio;
+    }
+
+    /// Create a WebGPU surface from this platform's canvas.
+    ///
+    /// This is a convenience method that calls createSurfaceFromCanvas()
+    /// with the platform's configured canvas selector. The returned surface
+    /// can be used to create a swap chain for rendering to the browser canvas.
+    ///
+    /// Parameters:
+    /// - instance: WebGPU instance from which to create the surface.
+    ///
+    /// Returns:
+    /// - A WebGPU surface bound to the platform's canvas, or null if creation failed.
+    ///
+    /// Example:
+    /// ```zig
+    /// var platform = WebPlatform.init(allocator);
+    /// // ... after obtaining WebGPU instance ...
+    /// const surface = platform.createSurface(instance);
+    /// if (surface) |s| {
+    ///     // Create swap chain with surface
+    /// }
+    /// ```
+    pub fn createSurface(self: *const Self, instance: zgpu.wgpu.Instance) ?zgpu.wgpu.Surface {
+        return createSurfaceFromCanvas(instance, self.canvas_selector);
     }
 
     // Platform interface implementation functions.
