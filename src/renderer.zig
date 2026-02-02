@@ -564,6 +564,158 @@ pub const Renderer = struct {
         };
     }
 
+    /// Initialize the renderer for headless (offscreen) rendering.
+    /// Creates a WebGPU instance, adapter (without surface), and device.
+    /// No swap chain is created - use createOffscreenRenderTarget() instead.
+    ///
+    /// This enables GPU rendering without a window or display, which is useful for:
+    /// - Automated testing
+    /// - Screenshot generation in CI environments
+    /// - Server-side rendering
+    pub fn initHeadless(allocator: std.mem.Allocator, width: u32, height: u32) RendererError!Self {
+        log.info("initializing headless renderer (no window/surface)", .{});
+
+        // Initialize Dawn proc table - MUST be called before any WebGPU functions
+        dawnProcSetProcs(dnGetProcs());
+        log.debug("Dawn proc table initialized", .{});
+
+        // Create Dawn native instance (C++ object that manages WebGPU backend)
+        const native_instance = dniCreate();
+        errdefer dniDestroy(native_instance);
+
+        // Get WebGPU instance from Dawn native instance
+        const instance = dniGetWgpuInstance(native_instance) orelse {
+            log.err("failed to get WebGPU instance from Dawn", .{});
+            return RendererError.InstanceCreationFailed;
+        };
+        log.debug("WebGPU instance created", .{});
+
+        // Request adapter WITHOUT a compatible surface.
+        // This allows headless operation - we render to an offscreen texture.
+        const adapter = requestAdapterHeadless(instance) orelse {
+            log.err("failed to obtain WebGPU adapter for headless rendering", .{});
+            instance.release();
+            return RendererError.AdapterRequestFailed;
+        };
+
+        // Log adapter properties for debugging
+        var props: zgpu.wgpu.AdapterProperties = undefined;
+        props.next_in_chain = null;
+        adapter.getProperties(&props);
+        log.info("WebGPU adapter (headless): {s} ({s})", .{ props.name, props.driver_description });
+        log.info("  Backend: {}, Type: {}", .{ props.backend_type, props.adapter_type });
+        log.info("  Vendor: {s} (0x{x}), Device ID: 0x{x}", .{ props.vendor_name, props.vendor_id, props.device_id });
+
+        // Request device with default limits
+        const device = requestDevice(adapter) orelse {
+            log.err("failed to obtain WebGPU device", .{});
+            adapter.release();
+            instance.release();
+            return RendererError.DeviceRequestFailed;
+        };
+        log.info("WebGPU device obtained (headless)", .{});
+
+        // Set up error callback to catch validation errors
+        device.setUncapturedErrorCallback(&deviceErrorCallback, null);
+
+        // Get the command queue from the device
+        const queue = device.getQueue();
+        log.debug("WebGPU queue obtained", .{});
+
+        // Create shader module from embedded WGSL source
+        const shader_module = createShaderModule(device) orelse {
+            log.err("failed to create shader module", .{});
+            queue.release();
+            device.release();
+            adapter.release();
+            instance.release();
+            return RendererError.ShaderCompilationFailed;
+        };
+
+        // Create bind group layout for uniform buffer (screen dimensions)
+        const bind_group_layout = createBindGroupLayout(device);
+        log.debug("bind group layout created for uniforms", .{});
+
+        // Create pipeline layout with the bind group layout in slot 0
+        const bind_group_layouts = [_]zgpu.wgpu.BindGroupLayout{bind_group_layout};
+        const pipeline_layout = device.createPipelineLayout(.{
+            .next_in_chain = null,
+            .label = "Main Pipeline Layout",
+            .bind_group_layout_count = bind_group_layouts.len,
+            .bind_group_layouts = &bind_group_layouts,
+        });
+        log.debug("pipeline layout created with bind group layout in slot 0", .{});
+
+        // Create render pipeline for triangle rendering (uses RGBA format for headless)
+        const render_pipeline = createRenderPipelineHeadless(device, pipeline_layout, shader_module) orelse {
+            log.err("failed to create render pipeline", .{});
+            pipeline_layout.release();
+            shader_module.release();
+            queue.release();
+            device.release();
+            adapter.release();
+            instance.release();
+            return RendererError.PipelineCreationFailed;
+        };
+
+        // Create dynamic vertex buffer
+        const vertex_result = createVertexBuffer(device);
+        log.info("dynamic vertex buffer created: {} vertices capacity ({} bytes)", .{
+            vertex_result.capacity,
+            @as(u64, vertex_result.capacity) * @sizeOf(Vertex),
+        });
+
+        // Create uniform buffer for screen dimensions
+        const uniform_buffer = createUniformBuffer(device);
+        log.info("uniform buffer created for screen dimensions", .{});
+
+        // Initialize uniform buffer with dimensions
+        const initial_uniforms: Uniforms = .{
+            .screen_size = .{ @floatFromInt(width), @floatFromInt(height) },
+        };
+        queue.writeBuffer(uniform_buffer, 0, Uniforms, &.{initial_uniforms});
+        log.info("uniform buffer initialized with screen size: {}x{}", .{ width, height });
+
+        // Create bind group containing the uniform buffer
+        const bind_group = createBindGroup(device, bind_group_layout, uniform_buffer);
+        log.info("bind group created with uniform buffer", .{});
+
+        log.info("headless renderer initialization complete", .{});
+
+        return Self{
+            .allocator = allocator,
+            .command_buffer = .empty,
+            .native_instance = native_instance,
+            .instance = instance,
+            .adapter = adapter,
+            .device = device,
+            .queue = queue,
+            .surface = null, // No surface in headless mode
+            .swapchain = null, // No swap chain in headless mode
+            .window = null, // No window in headless mode
+            .swapchain_width = width,
+            .swapchain_height = height,
+            .shader_module = shader_module,
+            .bind_group_layout = bind_group_layout,
+            .pipeline_layout = pipeline_layout,
+            .render_pipeline = render_pipeline,
+            .vertex_buffer = vertex_result.buffer,
+            .vertex_buffer_capacity = vertex_result.capacity,
+            .uniform_buffer = uniform_buffer,
+            .bind_group = bind_group,
+            .screenshot_texture = null,
+            .screenshot_staging_buffer = null,
+            .screenshot_width = 0,
+            .screenshot_height = 0,
+        };
+    }
+
+    /// Create an OffscreenRenderTarget for headless rendering.
+    /// Use this instead of createSwapChainRenderTarget() in headless mode.
+    pub fn createOffscreenRenderTarget(self: *Self, width: u32, height: u32) OffscreenRenderTarget {
+        return OffscreenRenderTarget.init(self.device.?, width, height);
+    }
+
     /// Create a SwapChainRenderTarget from this renderer's swap chain.
     /// The returned target wraps the renderer's swap chain and can be used with beginFrame().
     /// This enables the RenderTarget abstraction for windowed rendering.
@@ -1076,6 +1228,73 @@ pub const Renderer = struct {
         return pipeline;
     }
 
+    /// Create the render pipeline for headless (offscreen) rendering.
+    /// Uses RGBA8Unorm format to match OffscreenRenderTarget texture format.
+    /// Returns null if pipeline creation fails.
+    fn createRenderPipelineHeadless(
+        device: zgpu.wgpu.Device,
+        pipeline_layout: zgpu.wgpu.PipelineLayout,
+        shader_module: zgpu.wgpu.ShaderModule,
+    ) ?zgpu.wgpu.RenderPipeline {
+        // Color target state for RGBA8Unorm output (matches offscreen texture format)
+        const color_target: zgpu.wgpu.ColorTargetState = .{
+            .next_in_chain = null,
+            .format = .rgba8_unorm, // RGBA for offscreen rendering
+            .blend = &alpha_blend_state,
+            .write_mask = .{ .red = true, .green = true, .blue = true, .alpha = true },
+        };
+
+        // Fragment state with fs_main entry point
+        const fragment_state: zgpu.wgpu.FragmentState = .{
+            .next_in_chain = null,
+            .module = shader_module,
+            .entry_point = "fs_main",
+            .constant_count = 0,
+            .constants = null,
+            .target_count = 1,
+            .targets = @ptrCast(&color_target),
+        };
+
+        // Create the render pipeline
+        const pipeline = device.createRenderPipeline(.{
+            .next_in_chain = null,
+            .label = "Headless Triangle Render Pipeline",
+            .layout = pipeline_layout,
+            .vertex = .{
+                .next_in_chain = null,
+                .module = shader_module,
+                .entry_point = "vs_main",
+                .constant_count = 0,
+                .constants = null,
+                .buffer_count = 1,
+                .buffers = @ptrCast(&vertex_buffer_layout),
+            },
+            .primitive = .{
+                .next_in_chain = null,
+                .topology = .triangle_list,
+                .strip_index_format = .undef,
+                .front_face = .ccw,
+                .cull_mode = .none,
+            },
+            .depth_stencil = null,
+            .multisample = .{
+                .next_in_chain = null,
+                .count = 1,
+                .mask = 0xFFFFFFFF,
+                .alpha_to_coverage_enabled = false,
+            },
+            .fragment = &fragment_state,
+        });
+
+        if (@intFromPtr(pipeline) == 0) {
+            log.err("headless render pipeline creation returned null", .{});
+            return null;
+        }
+
+        log.info("headless render pipeline created successfully", .{});
+        return pipeline;
+    }
+
     /// Create a dynamic vertex buffer with maximum capacity.
     /// The buffer is reused each frame - vertices are uploaded via queue.writeBuffer().
     /// Usage: VERTEX (for binding as vertex buffer) | COPY_DST (for dynamic updates).
@@ -1235,6 +1454,40 @@ pub const Renderer = struct {
 
         if (response.status != .success) {
             log.warn("adapter request failed with status: {}", .{response.status});
+            return null;
+        }
+
+        return response.adapter;
+    }
+
+    /// Request a WebGPU adapter for headless rendering (no surface required).
+    /// Prefers high-performance GPU and uses the default backend.
+    /// Returns null if no suitable adapter is available.
+    fn requestAdapterHeadless(instance: zgpu.wgpu.Instance) ?zgpu.wgpu.Adapter {
+        const Response = struct {
+            adapter: ?zgpu.wgpu.Adapter = null,
+            status: zgpu.wgpu.RequestAdapterStatus = .unknown,
+        };
+
+        var response: Response = .{};
+
+        // Request adapter without a compatible surface for headless rendering.
+        // This allows GPU compute and offscreen rendering without a window.
+        instance.requestAdapter(
+            .{
+                .next_in_chain = null,
+                .compatible_surface = null, // No surface needed for headless
+                .power_preference = .high_performance,
+                .backend_type = .undef, // Let Dawn choose the best backend
+                .force_fallback_adapter = false,
+                .compatibility_mode = false,
+            },
+            &adapterCallback,
+            @ptrCast(&response),
+        );
+
+        if (response.status != .success) {
+            log.warn("headless adapter request failed with status: {}", .{response.status});
             return null;
         }
 
@@ -1685,6 +1938,115 @@ pub const Renderer = struct {
         log.info("screenshot saved to: {s}", .{filename});
     }
 
+    /// Take a screenshot from an offscreen render target and save to PNG.
+    /// This is used for headless rendering where we already have a texture.
+    /// The offscreen texture is in RGBA format (not BGRA like swap chain).
+    pub fn takeScreenshotFromOffscreen(
+        self: *Self,
+        offscreen_target: *OffscreenRenderTarget,
+        filename: []const u8,
+    ) RendererError!void {
+        const device = self.device orelse {
+            log.err("cannot take screenshot: device not initialized", .{});
+            return RendererError.ScreenshotFailed;
+        };
+
+        const queue = self.queue orelse {
+            log.err("cannot take screenshot: queue not initialized", .{});
+            return RendererError.ScreenshotFailed;
+        };
+
+        const width = offscreen_target.width;
+        const height = offscreen_target.height;
+        const aligned_bytes_per_row = calcAlignedBytesPerRow(width);
+        const buffer_size: u64 = @as(u64, aligned_bytes_per_row) * @as(u64, height);
+
+        // Create a staging buffer for CPU readback
+        const staging_buffer = device.createBuffer(.{
+            .next_in_chain = null,
+            .label = "Offscreen Screenshot Staging Buffer",
+            .usage = .{ .map_read = true, .copy_dst = true },
+            .size = buffer_size,
+            .mapped_at_creation = .false,
+        });
+        defer staging_buffer.release();
+
+        // Create a command encoder for copy operations
+        const encoder = device.createCommandEncoder(.{
+            .next_in_chain = null,
+            .label = "Offscreen Screenshot Encoder",
+        });
+
+        // Copy from offscreen texture to staging buffer
+        encoder.copyTextureToBuffer(
+            .{
+                .texture = offscreen_target.getTexture(),
+                .mip_level = 0,
+                .origin = .{ .x = 0, .y = 0, .z = 0 },
+                .aspect = .all,
+            },
+            .{
+                .buffer = staging_buffer,
+                .layout = .{
+                    .offset = 0,
+                    .bytes_per_row = aligned_bytes_per_row,
+                    .rows_per_image = height,
+                },
+            },
+            .{
+                .width = width,
+                .height = height,
+                .depth_or_array_layers = 1,
+            },
+        );
+
+        // Submit the commands
+        const commands = encoder.finish(.{
+            .label = "Offscreen Screenshot Commands",
+        });
+        queue.submit(&[_]zgpu.wgpu.CommandBuffer{commands});
+
+        // Map the staging buffer for CPU read
+        var map_ctx: MapCallbackContext = .{};
+
+        staging_buffer.mapAsync(
+            .{ .read = true },
+            0,
+            buffer_size,
+            &mapCallback,
+            @ptrCast(&map_ctx),
+        );
+
+        // Poll the device until mapping is complete
+        while (!map_ctx.completed) {
+            device.tick();
+        }
+
+        if (map_ctx.status != .success) {
+            log.err("offscreen buffer mapping failed with status: {}", .{map_ctx.status});
+            return RendererError.ScreenshotFailed;
+        }
+
+        // Get the mapped data
+        const mapped_data = staging_buffer.getConstMappedRange(u8, 0, buffer_size) orelse {
+            log.err("failed to get mapped range for offscreen screenshot", .{});
+            staging_buffer.unmap();
+            return RendererError.ScreenshotFailed;
+        };
+
+        // Write to PNG file - offscreen uses RGBA format (not BGRA)
+        self.writePngFileRgba(filename, mapped_data, width, height, aligned_bytes_per_row) catch |err| {
+            log.err("failed to write offscreen PNG file: {}", .{err});
+            staging_buffer.unmap();
+            return RendererError.ScreenshotFailed;
+        };
+
+        // Unmap the buffer
+        staging_buffer.unmap();
+
+        log.info("offscreen screenshot saved to: {s}", .{filename});
+    }
+
     /// Write pixel data to a PNG file using zigimg.
     /// Converts BGRA to RGBA and writes to PNG format.
     fn writePngFile(
@@ -1715,6 +2077,56 @@ pub const Renderer = struct {
                     .g = data[src_pixel + 1], // G from BGRA offset 1
                     .b = data[src_pixel + 0], // B from BGRA offset 0
                     .a = data[src_pixel + 3], // A from BGRA offset 3
+                };
+            }
+        }
+
+        // Create zigimg Image from pixel data
+        var image: zigimg.Image = .{
+            .width = width,
+            .height = height,
+            .pixels = .{ .rgba32 = rgba_pixels },
+            .animation = .{},
+        };
+
+        // Write to PNG file
+        var write_buffer: [1024 * 1024]u8 = undefined;
+        image.writeToFilePath(allocator, filename, &write_buffer, .{ .png = .{} }) catch |err| {
+            log.err("zigimg writeToFilePath failed: {}", .{err});
+            return err;
+        };
+    }
+
+    /// Write pixel data to a PNG file using zigimg.
+    /// Data is already in RGBA format (from offscreen render target).
+    fn writePngFileRgba(
+        self: *Self,
+        filename: []const u8,
+        data: []const u8,
+        width: u32,
+        height: u32,
+        aligned_bytes_per_row: u32,
+    ) !void {
+        _ = self;
+
+        const allocator = std.heap.page_allocator;
+
+        // Create RGBA pixel data (already RGBA, just need to handle row alignment)
+        const pixel_count = @as(usize, width) * @as(usize, height);
+        var rgba_pixels = try allocator.alloc(zigimg.color.Rgba32, pixel_count);
+        defer allocator.free(rgba_pixels);
+
+        // Copy RGBA data, handling row alignment
+        for (0..height) |y| {
+            const src_row_offset = y * aligned_bytes_per_row;
+            for (0..width) |x| {
+                const src_pixel = src_row_offset + x * 4;
+                const dst_idx = y * width + x;
+                rgba_pixels[dst_idx] = .{
+                    .r = data[src_pixel + 0], // R
+                    .g = data[src_pixel + 1], // G
+                    .b = data[src_pixel + 2], // B
+                    .a = data[src_pixel + 3], // A
                 };
             }
         }

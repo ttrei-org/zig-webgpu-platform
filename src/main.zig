@@ -22,8 +22,10 @@ const Platform = platform_mod.Platform;
 /// large jumps in game state (e.g., when window is dragged or minimized).
 const MAX_DELTA_TIME: f32 = 0.25; // 4 FPS minimum
 const desktop = @import("platform/desktop.zig");
+const headless = @import("platform/headless.zig");
 const renderer_mod = @import("renderer.zig");
 const Renderer = renderer_mod.Renderer;
+const OffscreenRenderTarget = renderer_mod.OffscreenRenderTarget;
 
 const log = std.log.scoped(.main);
 
@@ -96,8 +98,20 @@ pub fn main() void {
     const config = parseArgs(std.heap.page_allocator);
     log.info("config: headless={}, {}x{}", .{ config.headless, config.width, config.height });
 
-    // Initialize platform with config for runtime platform selection.
-    // Desktop platform warns if headless is requested (use headless platform instead).
+    if (config.headless) {
+        runHeadless(config);
+    } else {
+        runWindowed(config);
+    }
+
+    log.info("zig-gui-experiment exiting", .{});
+}
+
+/// Run in windowed mode with GLFW and swap chain rendering.
+fn runWindowed(config: Config) void {
+    log.info("starting windowed mode", .{});
+
+    // Initialize desktop platform with GLFW
     var platform = desktop.DesktopPlatform.init(std.heap.page_allocator, config) catch |err| {
         log.err("failed to initialize platform: {}", .{err});
         return;
@@ -110,9 +124,7 @@ pub fn main() void {
         return;
     };
 
-    // Initialize WebGPU renderer with the window.
-    // The renderer creates the surface before requesting the adapter to ensure
-    // the adapter is compatible with the window surface (required for X11).
+    // Initialize WebGPU renderer with the window
     const fb_size = platform.getFramebufferSize();
     var renderer = Renderer.init(std.heap.page_allocator, platform.window.?, fb_size.width, fb_size.height) catch |err| {
         log.err("failed to initialize renderer: {}", .{err});
@@ -122,8 +134,7 @@ pub fn main() void {
 
     log.info("WebGPU initialization complete - adapter, device, and swap chain configured", .{});
 
-    // Create a SwapChainRenderTarget from the renderer for the RenderTarget abstraction.
-    // This decouples frame rendering from the specific output target (window vs offscreen).
+    // Create a SwapChainRenderTarget for windowed rendering
     var swap_chain_target = renderer.createSwapChainRenderTarget();
     var render_target = swap_chain_target.asRenderTarget();
 
@@ -131,48 +142,35 @@ pub fn main() void {
     var app = App.init(std.heap.page_allocator);
     defer app.deinit();
 
-    // Get the platform abstraction interface for platform-agnostic main loop.
-    // The Platform interface provides shouldQuit(), pollEvents(), getMouseState(),
-    // and isKeyPressed() methods that work across desktop, web, and headless backends.
+    // Get the platform abstraction interface
     var plat = platform.platform();
 
     log.info("entering main loop", .{});
 
-    // Track if this is the first frame (for --screenshot mode)
     var first_frame_rendered = false;
-
-    // Track time for delta calculation
     var last_time: f64 = zglfw.getTime();
 
-    // Main loop: poll events and render until platform requests quit or app stops.
-    // Uses the Platform abstraction for portable event handling across backends.
+    // Main loop
     while (!plat.shouldQuit() and app.isRunning()) {
-        // Poll platform events (input, window events, etc.)
         plat.pollEvents();
 
-        // Calculate delta time
         const current_time = zglfw.getTime();
         var delta_time: f32 = @floatCast(current_time - last_time);
         last_time = current_time;
 
-        // Cap delta time to prevent large jumps after pauses
         if (delta_time > MAX_DELTA_TIME) {
             delta_time = MAX_DELTA_TIME;
         }
 
-        // Exit on Escape key (using platform-agnostic key check)
         if (plat.isKeyPressed(.escape)) {
             app.requestQuit();
             continue;
         }
 
-        // Get mouse state for input handling
         const mouse_state = plat.getMouseState();
-
-        // Update application state with delta time and input
         app.update(delta_time, mouse_state);
 
-        // Check if render target needs resize (window was resized)
+        // Check if render target needs resize
         const current_fb = platform.getFramebufferSize();
         if (current_fb.width > 0 and current_fb.height > 0) {
             if (render_target.needsResize(current_fb.width, current_fb.height)) {
@@ -183,36 +181,23 @@ pub fn main() void {
                 };
             }
         } else {
-            // Window is minimized (zero size) - skip this frame
             log.debug("window minimized, skipping frame", .{});
             continue;
         }
 
-        // Begin frame - get texture view from render target and command encoder
         const frame_state = renderer.beginFrame(render_target) catch |err| {
-            // Skip this frame on error (e.g., window minimized)
             if (err != renderer_mod.RendererError.BeginFrameFailed) {
                 log.warn("beginFrame failed: {}", .{err});
             }
             continue;
         };
 
-        // Begin render pass with cornflower blue clear color
         const render_pass = Renderer.beginRenderPass(frame_state, Renderer.cornflower_blue);
-
-        // Let the app queue draw commands
         app.render(&renderer);
-
-        // Flush all queued triangles in a single batched draw call
         renderer.flushBatch(render_pass);
-
-        // End render pass
         Renderer.endRenderPass(render_pass);
-
-        // End frame: submit command buffer and present via render target
         renderer.endFrame(frame_state, render_target);
 
-        // Handle --screenshot option: take screenshot after first frame and exit
         if (!first_frame_rendered) {
             first_frame_rendered = true;
             if (config.screenshot_filename) |filename| {
@@ -224,6 +209,76 @@ pub fn main() void {
             }
         }
     }
+}
 
-    log.info("zig-gui-experiment exiting", .{});
+/// Run in headless mode without a window.
+/// Uses offscreen rendering for automated testing and screenshot generation.
+fn runHeadless(config: Config) void {
+    log.info("starting headless mode (no window will be created)", .{});
+
+    // Initialize headless platform (no GLFW, no display required)
+    var platform = headless.HeadlessPlatform.init(std.heap.page_allocator, config);
+    defer platform.deinit();
+
+    // Initialize WebGPU renderer in headless mode (no surface/swap chain)
+    var renderer = Renderer.initHeadless(std.heap.page_allocator, config.width, config.height) catch |err| {
+        log.err("failed to initialize headless renderer: {}", .{err});
+        return;
+    };
+    defer renderer.deinit();
+
+    log.info("WebGPU headless initialization complete - rendering to offscreen texture", .{});
+
+    // Create an OffscreenRenderTarget for headless rendering
+    var offscreen_target = renderer.createOffscreenRenderTarget(config.width, config.height);
+    defer offscreen_target.deinit();
+    const render_target = offscreen_target.asRenderTarget();
+
+    // Initialize application state
+    var app = App.init(std.heap.page_allocator);
+    defer app.deinit();
+
+    // Get the platform abstraction interface
+    var plat = platform.platform();
+
+    log.info("entering headless main loop", .{});
+
+    var frame_count: u64 = 0;
+
+    // Headless main loop - runs for a limited number of frames or until screenshot is taken
+    while (!plat.shouldQuit() and app.isRunning()) {
+        plat.pollEvents();
+
+        // Use synthetic delta time (60 FPS simulation)
+        const delta_time: f32 = 1.0 / 60.0;
+
+        const mouse_state = plat.getMouseState();
+        app.update(delta_time, mouse_state);
+
+        const frame_state = renderer.beginFrame(render_target) catch |err| {
+            log.err("headless beginFrame failed: {}", .{err});
+            return;
+        };
+
+        const render_pass = Renderer.beginRenderPass(frame_state, Renderer.cornflower_blue);
+        app.render(&renderer);
+        renderer.flushBatch(render_pass);
+        Renderer.endRenderPass(render_pass);
+        renderer.endFrame(frame_state, render_target);
+
+        frame_count += 1;
+        log.info("headless frame {} rendered successfully", .{frame_count});
+
+        // Handle screenshot option - take screenshot and exit
+        if (config.screenshot_filename) |filename| {
+            log.info("taking headless screenshot to {s}", .{filename});
+            renderer.takeScreenshotFromOffscreen(&offscreen_target, filename) catch |err| {
+                log.err("failed to take headless screenshot: {}", .{err});
+            };
+            log.info("headless screenshot complete, exiting", .{});
+            break;
+        }
+    }
+
+    log.info("headless rendering complete after {} frames", .{frame_count});
 }
