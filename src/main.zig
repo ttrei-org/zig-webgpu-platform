@@ -99,7 +99,20 @@ fn parseArgs(allocator: std.mem.Allocator) Config {
     return config;
 }
 
-pub fn main() void {
+/// True if building for WASM (web) target
+const is_wasm = builtin.cpu.arch.isWasm();
+
+/// Main entry point for the application.
+/// For WASM builds, this is a stub that prevents std.start from trying to call main.
+/// The actual WASM entry point is wasm_main which is exported separately.
+pub const main = if (is_wasm) wasmMainStub else nativeMain;
+
+/// Stub main for WASM - prevents std.start from generating invalid code.
+/// The actual entry point is wasm_main.
+fn wasmMainStub() void {}
+
+/// Main implementation for native desktop builds.
+fn nativeMain() void {
     log.info("zig-gui-experiment starting", .{});
 
     // Parse command-line arguments using page_allocator for cross-platform compatibility
@@ -108,14 +121,9 @@ pub fn main() void {
 
     if (config.headless) {
         runHeadless(config);
-    } else if (is_native) {
+    } else {
         // Windowed mode is only available on native desktop builds
         runWindowed(config);
-    } else {
-        // On emscripten, run in headless/offscreen mode for now
-        // (Full web support will be added in a future issue)
-        log.info("emscripten target: running in headless mode", .{});
-        runHeadless(config);
     }
 
     log.info("zig-gui-experiment exiting", .{});
@@ -312,4 +320,17 @@ fn runHeadless(config: Config) void {
     }
 
     log.info("headless rendering complete after {} frames", .{frame_count});
+}
+
+/// WASM entry point for browser-based execution.
+/// Exported as 'wasm_main' and called from JavaScript after WASM module instantiation.
+/// Currently just validates that the module loaded - full WebGPU integration
+/// will be added in a future issue (requires browser's navigator.gpu API).
+export fn wasm_main() callconv(.c) void {
+    // For now, this is a placeholder that proves compilation works.
+    // Full web support requires:
+    // 1. JavaScript to provide WebGPU device via imports
+    // 2. Canvas element for rendering surface
+    // 3. Animation frame callback loop
+    // These will be implemented in a follow-up task.
 }

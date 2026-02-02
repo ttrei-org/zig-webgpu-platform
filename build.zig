@@ -4,13 +4,14 @@ pub fn build(b: *std.Build) void {
     const target = b.standardTargetOptions(.{});
     const optimize = b.standardOptimizeOption(.{});
 
-    // Detect if building for emscripten/web target
+    // Detect if building for web/WASM target
+    const target_arch = target.result.cpu.arch;
     const target_os = target.result.os.tag;
-    const is_emscripten = target_os == .emscripten;
-    const is_native = !is_emscripten;
+    const is_wasm = target_arch.isWasm();
+    const is_native = !is_wasm;
 
-    // Configure output path: zig-out/web/ for emscripten, default for native
-    if (is_emscripten) {
+    // Configure output path: zig-out/web/ for WASM builds, default for native
+    if (is_wasm) {
         b.install_prefix = "zig-out/web";
     }
 
@@ -49,7 +50,7 @@ pub fn build(b: *std.Build) void {
     }
 
     const exe = b.addExecutable(.{
-        .name = if (is_emscripten) "zig_gui_experiment.wasm" else "zig_gui_experiment",
+        .name = "zig_gui_experiment",
         .root_module = root_module,
     });
 
@@ -89,7 +90,7 @@ pub fn build(b: *std.Build) void {
             .flags = &.{"-fno-sanitize=undefined"},
         });
     } else {
-        // Emscripten-specific configuration
+        // WASM-specific configuration
         // Export WebGPU entry points and set up for browser environment
         //
         // Memory settings:
@@ -106,18 +107,22 @@ pub fn build(b: *std.Build) void {
         exe.max_memory = null; // Allow memory growth (no upper limit)
         exe.import_symbols = true; // Allow imports from JS environment
 
-        // Export main entry point and any WebGPU callback functions
-        // These must match the functions marked `export` in Zig source
+        // Export the wasm_main entry point which is explicitly defined for WASM builds.
+        // We don't export _start/main to avoid triggering the standard library's
+        // start.zig which doesn't support wasm32-emscripten architecture.
         exe.root_module.export_symbol_names = &.{
-            "_start", // WASM entry point
-            "main", // Alternative entry point for some loaders
+            "wasm_main", // Our custom WASM entry point
         };
+
+        // For emscripten specifically, mark that we don't need a standard entry point
+        // since the browser/JS will call our exported wasm_main function
+        exe.entry = .disabled;
     }
 
     b.installArtifact(exe);
 
     // For web builds, also generate JavaScript glue code
-    if (is_emscripten) {
+    if (is_wasm) {
         // Create JavaScript loader file that instantiates the WASM module
         // This provides the minimal glue code needed to load and run the WASM
         // in a browser with WebGPU support

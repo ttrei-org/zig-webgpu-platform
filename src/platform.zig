@@ -8,8 +8,8 @@
 const std = @import("std");
 const builtin = @import("builtin");
 
-/// True if building for native desktop (not emscripten/web)
-pub const is_native = builtin.os.tag != .emscripten;
+/// True if building for native desktop (not WASM/web)
+pub const is_native = !builtin.cpu.arch.isWasm();
 
 /// zglfw is only available on native desktop builds
 const zglfw = if (is_native) @import("zglfw") else struct {
