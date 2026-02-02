@@ -13,6 +13,7 @@ const render_target = @import("render_target.zig");
 
 pub const RenderTarget = render_target.RenderTarget;
 pub const SwapChainRenderTarget = render_target.SwapChainRenderTarget;
+pub const OffscreenRenderTarget = render_target.OffscreenRenderTarget;
 
 const log = std.log.scoped(.renderer);
 

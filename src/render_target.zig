@@ -308,6 +308,185 @@ test "Dimensions struct size and alignment" {
     try std.testing.expectEqual(@as(usize, 8), @sizeOf(Dimensions));
 }
 
+/// OffscreenRenderTarget creates and manages a WebGPU texture for headless rendering.
+///
+/// This target renders to an offscreen texture instead of a swap chain, enabling:
+/// - Headless rendering without a window
+/// - Automated testing and screenshot generation
+/// - Render-to-texture for post-processing
+///
+/// The texture is created with RENDER_ATTACHMENT | COPY_SRC usage:
+/// - RENDER_ATTACHMENT: enables using the texture as a render target
+/// - COPY_SRC: enables reading pixels back to CPU for screenshots
+///
+/// Lifecycle:
+/// 1. Create with init() specifying device and dimensions
+/// 2. Each frame: getTextureView() -> render -> present() (no-op for offscreen)
+/// 3. On resize: call resize() to recreate the texture
+/// 4. Call deinit() to release GPU resources
+pub const OffscreenRenderTarget = struct {
+    const Self = @This();
+
+    /// The offscreen texture for rendering.
+    texture: zgpu.wgpu.Texture,
+    /// Texture view for render pass attachment.
+    texture_view: zgpu.wgpu.TextureView,
+    /// WebGPU device needed for texture recreation on resize.
+    device: zgpu.wgpu.Device,
+    /// Current width in pixels.
+    width: u32,
+    /// Current height in pixels.
+    height: u32,
+    /// The RenderTarget interface that delegates to this implementation.
+    render_target: RenderTarget,
+
+    /// Initialize an OffscreenRenderTarget with the specified dimensions.
+    ///
+    /// Creates a texture with:
+    /// - Format: RGBA8Unorm (for easy PNG export)
+    /// - Usage: RENDER_ATTACHMENT | COPY_SRC
+    /// - Dimension: 2D
+    ///
+    /// Parameters:
+    /// - device: WebGPU device for resource creation
+    /// - width: Texture width in pixels
+    /// - height: Texture height in pixels
+    pub fn init(device: zgpu.wgpu.Device, width: u32, height: u32) Self {
+        const texture = createOffscreenTexture(device, width, height);
+        const texture_view = createTextureView(texture);
+
+        var self: Self = .{
+            .texture = texture,
+            .texture_view = texture_view,
+            .device = device,
+            .width = width,
+            .height = height,
+            .render_target = undefined,
+        };
+
+        // Initialize the RenderTarget interface with our function pointers.
+        self.render_target = .{
+            .context = @ptrCast(&self),
+            .getTextureViewFn = &getTextureViewImpl,
+            .getDimensionsFn = &getDimensionsImpl,
+            .presentFn = &presentImpl,
+            .needsResizeFn = &needsResizeImpl,
+            .resizeFn = &resizeImpl,
+        };
+
+        log.info("offscreen render target created: {}x{}", .{ width, height });
+        return self;
+    }
+
+    /// Release all GPU resources held by this target.
+    /// Must be called before the device is released.
+    pub fn deinit(self: *Self) void {
+        self.texture_view.release();
+        self.texture.release();
+        log.debug("offscreen render target resources released", .{});
+    }
+
+    /// Get the RenderTarget interface for this offscreen target.
+    /// Returns a pointer to the embedded RenderTarget that can be used polymorphically.
+    pub fn asRenderTarget(self: *Self) *RenderTarget {
+        // Update the context pointer to ensure it points to the current location.
+        // This is necessary because the struct may have been moved after init().
+        self.render_target.context = @ptrCast(self);
+        return &self.render_target;
+    }
+
+    /// Get the underlying texture for pixel readback operations.
+    /// Use this with copyTextureToBuffer for screenshot capture.
+    pub fn getTexture(self: *const Self) zgpu.wgpu.Texture {
+        return self.texture;
+    }
+
+    // Implementation functions for the RenderTarget interface.
+
+    fn getTextureViewImpl(render_target: *RenderTarget) RenderTargetError!zgpu.wgpu.TextureView {
+        const self: *Self = @ptrCast(@alignCast(render_target.context));
+        // For offscreen rendering, we always return the same texture view.
+        // Unlike swap chain, the texture persists across frames.
+        return self.texture_view;
+    }
+
+    fn getDimensionsImpl(render_target: *const RenderTarget) Dimensions {
+        const self: *const Self = @ptrCast(@alignCast(render_target.context));
+        return .{
+            .width = self.width,
+            .height = self.height,
+        };
+    }
+
+    fn presentImpl(_: *RenderTarget) void {
+        // No-op for offscreen rendering.
+        // There's no display to present to - the texture contents persist
+        // and can be read back via copyTextureToBuffer.
+    }
+
+    fn needsResizeImpl(render_target: *const RenderTarget, width: u32, height: u32) bool {
+        const self: *const Self = @ptrCast(@alignCast(render_target.context));
+        return self.width != width or self.height != height;
+    }
+
+    fn resizeImpl(render_target: *RenderTarget, width: u32, height: u32) RenderTargetError!void {
+        const self: *Self = @ptrCast(@alignCast(render_target.context));
+
+        // Don't resize to zero dimensions.
+        if (width == 0 or height == 0) {
+            log.debug("ignoring offscreen resize to zero dimensions", .{});
+            return;
+        }
+
+        // Release old resources.
+        self.texture_view.release();
+        self.texture.release();
+
+        // Create new texture with updated dimensions.
+        self.texture = createOffscreenTexture(self.device, width, height);
+        self.texture_view = createTextureView(self.texture);
+        self.width = width;
+        self.height = height;
+
+        log.info("offscreen render target resized to {}x{}", .{ width, height });
+    }
+
+    /// Create an offscreen texture with RENDER_ATTACHMENT | COPY_SRC usage.
+    fn createOffscreenTexture(device: zgpu.wgpu.Device, width: u32, height: u32) zgpu.wgpu.Texture {
+        return device.createTexture(.{
+            .next_in_chain = null,
+            .label = "Offscreen Render Target Texture",
+            .usage = .{ .render_attachment = true, .copy_src = true },
+            .dimension = .tdim_2d,
+            .size = .{
+                .width = width,
+                .height = height,
+                .depth_or_array_layers = 1,
+            },
+            .format = .rgba8_unorm, // RGBA for easy PNG export
+            .mip_level_count = 1,
+            .sample_count = 1,
+            .view_format_count = 0,
+            .view_formats = null,
+        });
+    }
+
+    /// Create a texture view for the offscreen texture.
+    fn createTextureView(texture: zgpu.wgpu.Texture) zgpu.wgpu.TextureView {
+        return texture.createView(.{
+            .next_in_chain = null,
+            .label = "Offscreen Render Target View",
+            .format = .rgba8_unorm,
+            .dimension = .tvdim_2d,
+            .base_mip_level = 0,
+            .mip_level_count = 1,
+            .base_array_layer = 0,
+            .array_layer_count = 1,
+            .aspect = .all,
+        });
+    }
+};
+
 test "SwapChainRenderTarget interface consistency" {
     // Verify the RenderTarget function pointer types match SwapChainRenderTarget implementations.
     // This is a compile-time check that the signatures are correct.
@@ -316,6 +495,23 @@ test "SwapChainRenderTarget interface consistency" {
     const rt_present: @TypeOf(RenderTarget.presentFn) = &SwapChainRenderTarget.presentImpl;
     const rt_needs_resize: @TypeOf(RenderTarget.needsResizeFn) = &SwapChainRenderTarget.needsResizeImpl;
     const rt_resize: @TypeOf(RenderTarget.resizeFn) = &SwapChainRenderTarget.resizeImpl;
+
+    // Suppress unused variable warnings - we just need the assignments to compile.
+    _ = rt_get_tex;
+    _ = rt_get_dim;
+    _ = rt_present;
+    _ = rt_needs_resize;
+    _ = rt_resize;
+}
+
+test "OffscreenRenderTarget interface consistency" {
+    // Verify the RenderTarget function pointer types match OffscreenRenderTarget implementations.
+    // This is a compile-time check that the signatures are correct.
+    const rt_get_tex: @TypeOf(RenderTarget.getTextureViewFn) = &OffscreenRenderTarget.getTextureViewImpl;
+    const rt_get_dim: @TypeOf(RenderTarget.getDimensionsFn) = &OffscreenRenderTarget.getDimensionsImpl;
+    const rt_present: @TypeOf(RenderTarget.presentFn) = &OffscreenRenderTarget.presentImpl;
+    const rt_needs_resize: @TypeOf(RenderTarget.needsResizeFn) = &OffscreenRenderTarget.needsResizeImpl;
+    const rt_resize: @TypeOf(RenderTarget.resizeFn) = &OffscreenRenderTarget.resizeImpl;
 
     // Suppress unused variable warnings - we just need the assignments to compile.
     _ = rt_get_tex;
