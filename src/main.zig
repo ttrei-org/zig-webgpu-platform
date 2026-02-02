@@ -201,7 +201,7 @@ fn runWindowed(config: Config) void {
         if (!first_frame_rendered) {
             first_frame_rendered = true;
             if (config.screenshot_filename) |filename| {
-                renderer.takeScreenshot(filename) catch |err| {
+                renderer.screenshot(filename) catch |err| {
                     log.err("failed to take startup screenshot: {}", .{err});
                 };
                 log.info("screenshot mode: exiting after capturing {s}", .{filename});

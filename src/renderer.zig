@@ -1791,6 +1791,26 @@ pub const Renderer = struct {
         ctx.completed = true;
     }
 
+    /// Save the current frame to a PNG file at the specified path.
+    /// This is the public API for screenshot capture in windowed mode.
+    ///
+    /// The method:
+    /// 1. Triggers GPU readback by re-rendering to a screenshot texture
+    /// 2. Waits for the GPU copy to staging buffer to complete
+    /// 3. Converts pixel data to PNG format (BGRA to RGBA)
+    /// 4. Writes the PNG file to the specified path
+    ///
+    /// For headless mode, use `takeScreenshotFromOffscreen` instead which
+    /// captures from an existing offscreen render target without re-rendering.
+    ///
+    /// Errors are returned as `RendererError.ScreenshotFailed` which covers:
+    /// - Device/queue not initialized
+    /// - Buffer mapping failure
+    /// - File I/O errors (directory doesn't exist, permission denied, disk full)
+    pub fn screenshot(self: *Self, path: []const u8) RendererError!void {
+        return self.takeScreenshot(path);
+    }
+
     /// Take a screenshot of the current frame and save it to a PNG file.
     /// This re-renders the current scene to a separate texture and copies to CPU memory.
     ///
@@ -1799,7 +1819,7 @@ pub const Renderer = struct {
     /// 2. Re-renders the scene (triangle) to capture pixels
     /// 3. Copies the texture to a staging buffer
     /// 4. Maps the buffer and writes to a PNG file
-    pub fn takeScreenshot(self: *Self, filename: []const u8) RendererError!void {
+    fn takeScreenshot(self: *Self, filename: []const u8) RendererError!void {
         const device = self.device orelse {
             log.err("cannot take screenshot: device not initialized", .{});
             return RendererError.ScreenshotFailed;
