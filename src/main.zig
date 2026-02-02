@@ -103,13 +103,11 @@ fn parseArgs(allocator: std.mem.Allocator) Config {
 const is_wasm = builtin.cpu.arch.isWasm();
 
 /// Main entry point for the application.
-/// For WASM builds, this is a stub that prevents std.start from trying to call main.
-/// The actual WASM entry point is wasm_main which is exported separately.
-pub const main = if (is_wasm) wasmMainStub else nativeMain;
-
-/// Stub main for WASM - prevents std.start from generating invalid code.
-/// The actual entry point is wasm_main.
-fn wasmMainStub() void {}
+/// For WASM builds, we provide a _start stub to satisfy std.start checks, but the
+/// actual entry point is the exported wasm_main function called from JavaScript.
+/// This prevents std.start from trying to generate entry code for wasm32-emscripten
+/// which doesn't have proper start.zig support (no _start symbol for wasm arch).
+pub const main = if (!is_wasm) nativeMain else struct {};
 
 /// Main implementation for native desktop builds.
 fn nativeMain() void {
@@ -333,4 +331,16 @@ export fn wasm_main() callconv(.c) void {
     // 2. Canvas element for rendering surface
     // 3. Animation frame callback loop
     // These will be implemented in a follow-up task.
+}
+
+// For WASM builds targeting emscripten, we need to provide a _start symbol to prevent
+// std.start from trying to export its own _start (which uses arch-specific assembly
+// that doesn't support wasm32-emscripten). This is a no-op since we use wasm_main
+// as the actual entry point called from JavaScript.
+//
+// The pub declaration satisfies the @hasDecl(root, "_start") check in std/start.zig.
+pub const _start = if (is_wasm) wasmStart else {};
+
+fn wasmStart() callconv(.c) void {
+    // No-op stub. Browser calls wasm_main directly via JavaScript.
 }
