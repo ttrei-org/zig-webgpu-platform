@@ -107,6 +107,11 @@ pub fn build(b: *std.Build) void {
         exe.max_memory = null; // Allow memory growth (no upper limit)
         exe.import_symbols = true; // Allow imports from JS environment
 
+        // Note: We do NOT link libc for WASM builds.
+        // Zig doesn't have libc support for wasm32-emscripten targets.
+        // Instead, we import the required functions from the JavaScript environment.
+        // The extern "c" functions in std.os.emscripten are imported, not linked.
+
         // Export the wasm_main entry point which is explicitly defined for WASM builds.
         // We don't export _start/main to avoid triggering the standard library's
         // start.zig which doesn't support wasm32-emscripten architecture.

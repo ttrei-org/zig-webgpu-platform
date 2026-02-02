@@ -37,11 +37,36 @@ const OffscreenRenderTarget = renderer_mod.OffscreenRenderTarget;
 
 const log = std.log.scoped(.main);
 
-/// Configure logging level.
+/// Configure logging level and custom log function for WASM.
 /// Set to .debug for verbose output, .info for normal, .warn or .err for quieter output.
 pub const std_options: std.Options = .{
     .log_level = .info,
+    // On WASM, use a custom log function that doesn't require Thread.getCurrentId().
+    // The default std.log.defaultLog uses Thread.getCurrentId() for thread-safe stderr
+    // access, but emscripten doesn't support threads.
+    .logFn = if (is_wasm) wasmLogFn else std.log.defaultLog,
 };
+
+/// Custom log function for WASM builds.
+/// Uses emscripten's console output instead of std.debug which requires threads.
+/// This avoids the "Unsupported operating system emscripten" error from Thread.getCurrentId().
+fn wasmLogFn(
+    comptime level: std.log.Level,
+    comptime scope: @TypeOf(.EnumLiteral),
+    comptime format: []const u8,
+    args: anytype,
+) void {
+    // For WASM, we use emscripten's console logging via EM_ASM or just skip logging.
+    // Currently we skip logging to avoid complexity - browser DevTools can be used
+    // for debugging via JavaScript console.log() calls.
+    //
+    // A future enhancement could use emscripten_console_log() or EM_ASM to output
+    // to the browser console, but for now we suppress WASM logging to fix the build.
+    _ = level;
+    _ = scope;
+    _ = format;
+    _ = args;
+}
 
 // Export zgpu types for use in other modules
 pub const GraphicsContext = zgpu.GraphicsContext;
