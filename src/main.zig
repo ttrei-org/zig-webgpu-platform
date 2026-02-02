@@ -122,6 +122,11 @@ pub fn main() void {
 
     log.info("WebGPU initialization complete - adapter, device, and swap chain configured", .{});
 
+    // Create a SwapChainRenderTarget from the renderer for the RenderTarget abstraction.
+    // This decouples frame rendering from the specific output target (window vs offscreen).
+    var swap_chain_target = renderer.createSwapChainRenderTarget();
+    var render_target = swap_chain_target.asRenderTarget();
+
     // Initialize application state
     var app = App.init(std.heap.page_allocator);
     defer app.deinit();
@@ -167,8 +172,24 @@ pub fn main() void {
         // Update application state with delta time and input
         app.update(delta_time, mouse_state);
 
-        // Begin frame - get swap chain texture and command encoder
-        const frame_state = renderer.beginFrame() catch |err| {
+        // Check if render target needs resize (window was resized)
+        const current_fb = platform.getFramebufferSize();
+        if (current_fb.width > 0 and current_fb.height > 0) {
+            if (render_target.needsResize(current_fb.width, current_fb.height)) {
+                log.info("window resized to {}x{}, resizing render target", .{ current_fb.width, current_fb.height });
+                render_target.resize(current_fb.width, current_fb.height) catch |err| {
+                    log.warn("failed to resize render target: {}", .{err});
+                    continue;
+                };
+            }
+        } else {
+            // Window is minimized (zero size) - skip this frame
+            log.debug("window minimized, skipping frame", .{});
+            continue;
+        }
+
+        // Begin frame - get texture view from render target and command encoder
+        const frame_state = renderer.beginFrame(render_target) catch |err| {
             // Skip this frame on error (e.g., window minimized)
             if (err != renderer_mod.RendererError.BeginFrameFailed) {
                 log.warn("beginFrame failed: {}", .{err});
@@ -188,8 +209,8 @@ pub fn main() void {
         // End render pass
         Renderer.endRenderPass(render_pass);
 
-        // End frame: submit command buffer and present swap chain
-        renderer.endFrame(frame_state);
+        // End frame: submit command buffer and present via render target
+        renderer.endFrame(frame_state, render_target);
 
         // Handle --screenshot option: take screenshot after first frame and exit
         if (!first_frame_rendered) {

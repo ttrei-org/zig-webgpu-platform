@@ -9,6 +9,10 @@ const builtin = @import("builtin");
 const zgpu = @import("zgpu");
 const zglfw = @import("zglfw");
 const zigimg = @import("zigimg");
+const render_target = @import("render_target.zig");
+
+pub const RenderTarget = render_target.RenderTarget;
+pub const SwapChainRenderTarget = render_target.SwapChainRenderTarget;
 
 const log = std.log.scoped(.renderer);
 
@@ -559,19 +563,36 @@ pub const Renderer = struct {
         };
     }
 
+    /// Create a SwapChainRenderTarget from this renderer's swap chain.
+    /// The returned target wraps the renderer's swap chain and can be used with beginFrame().
+    /// This enables the RenderTarget abstraction for windowed rendering.
+    ///
+    /// Note: The returned SwapChainRenderTarget holds references to the renderer's resources.
+    /// It should be reinitialized if the renderer's swap chain is recreated.
+    pub fn createSwapChainRenderTarget(self: *Self) SwapChainRenderTarget {
+        return SwapChainRenderTarget.init(
+            self.swapchain.?,
+            self.device.?,
+            self.surface.?,
+            self.swapchain_width,
+            self.swapchain_height,
+        );
+    }
+
     /// Begin a new frame for rendering.
-    /// Gets the current swap chain texture view and creates a command encoder.
+    /// Gets the current texture view from the render target and creates a command encoder.
     /// Call this once at the start of each frame before recording render commands.
-    /// Handles swap chain recreation if the window has been resized.
     /// Returns FrameState containing the texture view and command encoder.
-    pub fn beginFrame(self: *Self) RendererError!FrameState {
+    ///
+    /// Parameters:
+    /// - target: The render target to render to. Can be a swap chain (windowed) or
+    ///   offscreen texture (headless). The target provides the texture view for rendering.
+    ///
+    /// Note: The caller is responsible for handling resize by calling target.needsResize()
+    /// and target.resize() before calling beginFrame().
+    pub fn beginFrame(self: *Self, target: *RenderTarget) RendererError!FrameState {
         const device = self.device orelse {
             log.err("cannot begin frame: device not initialized", .{});
-            return RendererError.BeginFrameFailed;
-        };
-
-        const window = self.window orelse {
-            log.err("cannot begin frame: window not set", .{});
             return RendererError.BeginFrameFailed;
         };
 
@@ -579,61 +600,26 @@ pub const Renderer = struct {
         // Each frame starts fresh with an empty command list.
         self.command_buffer.clearRetainingCapacity();
 
-        // Check if window was resized and recreate swap chain if needed
-        const fb_size = window.getFramebufferSize();
-        const current_width: u32 = @intCast(fb_size[0]);
-        const current_height: u32 = @intCast(fb_size[1]);
-
-        if (current_width != self.swapchain_width or current_height != self.swapchain_height) {
-            // Window was resized - need to recreate swap chain
-            if (current_width > 0 and current_height > 0) {
-                log.info("window resized: {}x{} -> {}x{}, recreating swap chain", .{
-                    self.swapchain_width, self.swapchain_height, current_width, current_height,
-                });
-                try self.recreateSwapChain(current_width, current_height);
-            } else {
-                // Window is minimized (zero size) - skip this frame
-                log.debug("window minimized, skipping frame", .{});
-                return RendererError.BeginFrameFailed;
-            }
-        }
-
-        const swapchain = self.swapchain orelse {
-            log.err("cannot begin frame: swap chain not initialized", .{});
+        // Get the texture view from the render target.
+        // This abstracts over swap chain vs offscreen texture - both provide a texture view.
+        const texture_view = target.getTextureView() catch |err| {
+            log.warn("failed to get texture view from render target: {}", .{err});
             return RendererError.BeginFrameFailed;
         };
 
-        // Get the texture view from the swap chain for this frame.
-        // Dawn's getCurrentTextureView can return null (as address 0) if the
-        // swap chain is invalid. We check for this by inspecting the pointer address.
-        const texture_view = swapchain.getCurrentTextureView();
-        if (@intFromPtr(texture_view) == 0) {
-            log.warn("swap chain returned null texture view, attempting recreation", .{});
-            try self.recreateSwapChain(current_width, current_height);
-
-            // Try again after recreation
-            const new_swapchain = self.swapchain orelse {
-                log.err("swap chain recreation failed", .{});
-                return RendererError.BeginFrameFailed;
+        // Update uniform buffer with current screen dimensions from the render target.
+        // This ensures shaders use correct NDC transform after any resize.
+        const dimensions = target.getDimensions();
+        if (dimensions.width != self.swapchain_width or dimensions.height != self.swapchain_height) {
+            self.swapchain_width = dimensions.width;
+            self.swapchain_height = dimensions.height;
+            const queue = self.queue orelse return RendererError.BeginFrameFailed;
+            const uniform_buffer = self.uniform_buffer orelse return RendererError.BeginFrameFailed;
+            const new_uniforms: Uniforms = .{
+                .screen_size = .{ @floatFromInt(dimensions.width), @floatFromInt(dimensions.height) },
             };
-            const new_texture_view = new_swapchain.getCurrentTextureView();
-            if (@intFromPtr(new_texture_view) == 0) {
-                log.err("swap chain still returning null texture view after recreation", .{});
-                return RendererError.BeginFrameFailed;
-            }
-
-            // Create command encoder with the new texture view
-            const command_encoder = device.createCommandEncoder(.{
-                .next_in_chain = null,
-                .label = "Frame Command Encoder",
-            });
-
-            log.debug("frame begun (after swap chain recreation)", .{});
-
-            return FrameState{
-                .texture_view = new_texture_view,
-                .command_encoder = command_encoder,
-            };
+            queue.writeBuffer(uniform_buffer, 0, Uniforms, &.{new_uniforms});
+            log.debug("uniform buffer updated with screen size: {}x{}", .{ dimensions.width, dimensions.height });
         }
 
         // Create a command encoder for recording GPU commands this frame
@@ -801,19 +787,18 @@ pub const Renderer = struct {
 
     /// End the current frame and present it to the screen.
     /// Finishes the command encoder to create a command buffer, submits it
-    /// to the GPU queue, and presents the swap chain.
+    /// to the GPU queue, and presents via the render target.
     /// Call this once at the end of each frame after all drawing is complete.
+    ///
+    /// Parameters:
+    /// - frame_state: The FrameState returned by beginFrame().
+    /// - target: The same render target passed to beginFrame(). Used for presentation.
     ///
     /// Note: flushBatch() should be called before endRenderPass() to render
     /// any queued triangles. This function only handles frame submission.
-    pub fn endFrame(self: *Self, frame_state: FrameState) void {
+    pub fn endFrame(self: *Self, frame_state: FrameState, target: *RenderTarget) void {
         const queue = self.queue orelse {
             log.err("cannot end frame: queue not initialized", .{});
-            return;
-        };
-
-        const swapchain = self.swapchain orelse {
-            log.err("cannot end frame: swap chain not initialized", .{});
             return;
         };
 
@@ -825,11 +810,10 @@ pub const Renderer = struct {
         // Submit the command buffer to the GPU queue
         queue.submit(&[_]zgpu.wgpu.CommandBuffer{command_buffer});
 
-        // Release the texture view (no longer needed after submission)
-        frame_state.texture_view.release();
-
-        // Present the swap chain to display the rendered frame
-        swapchain.present();
+        // Present the frame via the render target.
+        // This handles texture view release and swap chain presentation.
+        // For offscreen targets, this is a no-op.
+        target.present();
 
         // Tick the device to process internal Dawn work.
         // Required on some platforms (especially Linux/Vulkan) for the
