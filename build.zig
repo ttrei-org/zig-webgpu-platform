@@ -91,14 +91,27 @@ pub fn build(b: *std.Build) void {
     } else {
         // Emscripten-specific configuration
         // Export WebGPU entry points and set up for browser environment
+        //
+        // Memory settings:
+        // - export_memory: Required for JS to access WASM memory
+        // - initial_memory: 64MB starting heap (sufficient for basic rendering)
+        // - max_memory: null allows growth (equivalent to -sALLOW_MEMORY_GROWTH)
+        //
+        // Note: Browser-side settings (-sUSE_WEBGPU=1, -sMODULARIZE, -sEXPORT_ES6)
+        // are configured in the HTML/JS loader, not the WASM build itself.
+        // The browser provides WebGPU via navigator.gpu, no linking required.
 
-        // Set emscripten-specific linker flags
-        if (exe.root_module.resolved_target) |resolved| {
-            if (resolved.result.os.tag == .emscripten) {
-                // Emscripten builds don't need Dawn - they use browser WebGPU
-                // Additional emscripten flags can be added here as needed
-            }
-        }
+        exe.export_memory = true;
+        exe.initial_memory = 64 * 1024 * 1024; // 64MB initial heap
+        exe.max_memory = null; // Allow memory growth (no upper limit)
+        exe.import_symbols = true; // Allow imports from JS environment
+
+        // Export main entry point and any WebGPU callback functions
+        // These must match the functions marked `export` in Zig source
+        exe.root_module.export_symbol_names = &.{
+            "_start", // WASM entry point
+            "main", // Alternative entry point for some loaders
+        };
     }
 
     b.installArtifact(exe);
