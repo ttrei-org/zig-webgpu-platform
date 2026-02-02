@@ -941,6 +941,22 @@ pub const WebPlatform = struct {
         const pixel_ratio = emscripten.emscripten_get_device_pixel_ratio();
         log.info("canvas dimensions: {}x{}, pixel ratio: {d:.2}", .{ width, height, pixel_ratio });
 
+        // Register mousemove event listener via Emscripten HTML5 API.
+        // The callback receives mouse coordinates which we use to update platform state.
+        // Target the canvas element so we only capture movement over the rendering area.
+        const mousemove_result = emscripten.emscripten_set_mousemove_callback(
+            canvas_selector,
+            null, // user_data - we use global_web_platform instead
+            true, // use_capture - capture phase for reliable event handling
+            mousemoveCallback,
+        );
+
+        if (mousemove_result != emscripten.EMSCRIPTEN_RESULT_SUCCESS) {
+            log.warn("failed to register mousemove callback (result={})", .{mousemove_result});
+        } else {
+            log.info("mousemove event listener registered on canvas", .{});
+        }
+
         return Self{
             .allocator = allocator,
             .width = width,
@@ -957,6 +973,34 @@ pub const WebPlatform = struct {
             .quit_requested = false,
             .frame_count = 0,
         };
+    }
+
+    /// Emscripten mousemove event callback.
+    /// Called by the browser when the mouse moves over the canvas element.
+    /// Updates the global platform's mouse position using canvas-relative coordinates.
+    ///
+    /// The callback uses canvasX/canvasY which are coordinates relative to the canvas
+    /// element's top-left corner, accounting for CSS transforms and scroll position.
+    fn mousemoveCallback(
+        _: c_int, // event_type - always EMSCRIPTEN_EVENT_MOUSEMOVE
+        mouse_event: *const emscripten.EmscriptenMouseEvent,
+        _: ?*anyopaque, // user_data - unused, we use global_web_platform
+    ) callconv(.c) bool {
+        // Access the global platform instance to update mouse state.
+        // This is safe because the callback is only registered when the platform is initialized,
+        // and we remove all event listeners in deinit() before deallocating.
+        if (global_web_platform) |p| {
+            // Use canvasX/canvasY for coordinates relative to the canvas element.
+            // These are the most useful for UI hit testing as they account for
+            // canvas position, scrolling, and CSS transforms.
+            p.updateMousePosition(
+                @floatFromInt(mouse_event.canvasX),
+                @floatFromInt(mouse_event.canvasY),
+            );
+        }
+        // Return false to allow event propagation to other handlers.
+        // This enables coexisting with JavaScript event listeners if needed.
+        return false;
     }
 
     /// Clean up platform resources.
