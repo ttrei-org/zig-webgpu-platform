@@ -72,23 +72,24 @@ pub const Uniforms = extern struct {
 /// GPU vertex layout for triangle rendering.
 /// Matches VertexInput in triangle.wgsl:
 ///   @location(0) position: vec2<f32>
-///   @location(1) color: vec3<f32>
+///   @location(1) color: vec4<f32>
 ///
-/// Memory layout (20 bytes total):
+/// Memory layout (24 bytes total):
 ///   offset 0: position[0] (f32)
 ///   offset 4: position[1] (f32)
-///   offset 8: color[0] (f32)
-///   offset 12: color[1] (f32)
-///   offset 16: color[2] (f32)
+///   offset 8: color[0] (f32) - red
+///   offset 12: color[1] (f32) - green
+///   offset 16: color[2] (f32) - blue
+///   offset 20: color[3] (f32) - alpha
 pub const Vertex = extern struct {
     position: [2]f32,
-    color: [3]f32,
+    color: [4]f32,
 
-    // Compile-time size guarantee: 5 floats * 4 bytes = 20 bytes total.
+    // Compile-time size guarantee: 6 floats * 4 bytes = 24 bytes total.
     // This ensures the struct layout matches GPU vertex buffer expectations.
     comptime {
-        if (@sizeOf(Vertex) != 20) {
-            @compileError("Vertex struct must be exactly 20 bytes for GPU compatibility");
+        if (@sizeOf(Vertex) != 24) {
+            @compileError("Vertex struct must be exactly 24 bytes for GPU compatibility");
         }
     }
 };
@@ -116,15 +117,26 @@ pub const Color = struct {
     pub const cyan: Color = .{ .r = 0.0, .g = 1.0, .b = 1.0, .a = 1.0 };
     pub const magenta: Color = .{ .r = 1.0, .g = 0.0, .b = 1.0, .a = 1.0 };
 
-    /// Convert to RGB array for vertex attribute compatibility.
-    /// Discards the alpha channel for use with current vertex format.
+    /// Convert to RGB array (legacy compatibility).
+    /// Discards the alpha channel.
     pub fn toRgb(self: Color) [3]f32 {
         return .{ self.r, self.g, self.b };
+    }
+
+    /// Convert to RGBA array for vertex attribute compatibility.
+    /// Includes the alpha channel for transparency support.
+    pub fn toRgba(self: Color) [4]f32 {
+        return .{ self.r, self.g, self.b, self.a };
     }
 
     /// Create a Color from an RGB array (alpha defaults to 1.0).
     pub fn fromRgb(rgb_array: [3]f32) Color {
         return .{ .r = rgb_array[0], .g = rgb_array[1], .b = rgb_array[2], .a = 1.0 };
+    }
+
+    /// Create a Color from an RGBA array.
+    pub fn fromRgba(rgba_array: [4]f32) Color {
+        return .{ .r = rgba_array[0], .g = rgba_array[1], .b = rgba_array[2], .a = rgba_array[3] };
     }
 
     /// Create a Color from individual RGB values (alpha defaults to 1.0).
@@ -186,10 +198,10 @@ pub const Color = struct {
     }
 };
 
-/// RGB vertex color type for GPU vertex attributes.
-/// This is the low-level format matching the vertex buffer layout (vec3<f32> in WGSL).
+/// RGBA vertex color type for GPU vertex attributes.
+/// This is the low-level format matching the vertex buffer layout (vec4<f32> in WGSL).
 /// For high-level color operations, use the Color struct instead.
-pub const VertexColor = [3]f32;
+pub const VertexColor = [4]f32;
 
 /// A triangle draw command containing three vertices with positions and colors.
 /// Positions are in screen coordinates (pixels), origin at top-left.
@@ -201,13 +213,13 @@ pub const Triangle = struct {
     /// Three vertex positions in screen coordinates (x, y in pixels).
     positions: [3][2]f32,
     /// Color at each vertex for gradient interpolation.
-    /// Uses the Color type for richer color manipulation; alpha is ignored during
-    /// GPU upload (only RGB is used in the current vertex format).
+    /// Uses the Color type for richer color manipulation; alpha is included
+    /// in GPU upload for transparency support.
     colors: [3]Color,
 
     /// Create a Triangle from an array of Vertex structs.
     /// Convenience function for converting between representations.
-    /// Note: Converts from VertexColor (RGB array) to Color (loses no data, alpha defaults to 1.0).
+    /// Note: Converts from VertexColor (RGBA array) to Color (preserves all channels).
     pub fn fromVertices(vertices: [3]Vertex) Triangle {
         return .{
             .positions = .{
@@ -216,20 +228,20 @@ pub const Triangle = struct {
                 vertices[2].position,
             },
             .colors = .{
-                Color.fromRgb(vertices[0].color),
-                Color.fromRgb(vertices[1].color),
-                Color.fromRgb(vertices[2].color),
+                Color.fromRgba(vertices[0].color),
+                Color.fromRgba(vertices[1].color),
+                Color.fromRgba(vertices[2].color),
             },
         };
     }
 
     /// Convert back to an array of Vertex structs for GPU rendering.
-    /// Extracts RGB components from Color (alpha is currently ignored).
+    /// Extracts RGBA components from Color for full transparency support.
     pub fn toVertices(self: Triangle) [3]Vertex {
         return .{
-            .{ .position = self.positions[0], .color = self.colors[0].toRgb() },
-            .{ .position = self.positions[1], .color = self.colors[1].toRgb() },
-            .{ .position = self.positions[2], .color = self.colors[2].toRgb() },
+            .{ .position = self.positions[0], .color = self.colors[0].toRgba() },
+            .{ .position = self.positions[1], .color = self.colors[1].toRgba() },
+            .{ .position = self.positions[2], .color = self.colors[2].toRgba() },
         };
     }
 };
@@ -259,11 +271,11 @@ pub const DrawCommand = union(enum) {
 /// that vertex attribute interpolation works correctly in the fragment shader.
 pub const test_triangle_vertices = [_]Vertex{
     // Bottom-left: red (100px from left, 225px from top)
-    .{ .position = .{ 100.0, 225.0 }, .color = .{ 1.0, 0.0, 0.0 } },
+    .{ .position = .{ 100.0, 225.0 }, .color = .{ 1.0, 0.0, 0.0, 1.0 } },
     // Bottom-right: green (300px from left, 225px from top)
-    .{ .position = .{ 300.0, 225.0 }, .color = .{ 0.0, 1.0, 0.0 } },
+    .{ .position = .{ 300.0, 225.0 }, .color = .{ 0.0, 1.0, 0.0, 1.0 } },
     // Top-center: blue (200px from left, 75px from top)
-    .{ .position = .{ 200.0, 75.0 }, .color = .{ 0.0, 0.0, 1.0 } },
+    .{ .position = .{ 200.0, 75.0 }, .color = .{ 0.0, 0.0, 1.0, 1.0 } },
 };
 
 /// Vertex attributes describing position and color shader inputs.
@@ -275,14 +287,14 @@ const vertex_attributes = [_]zgpu.wgpu.VertexAttribute{
         .shader_location = 0, // @location(0)
     },
     .{
-        .format = .float32x3, // vec3<f32> for color
+        .format = .float32x4, // vec4<f32> for color (RGBA with alpha)
         .offset = @sizeOf([2]f32), // 8 bytes after position
         .shader_location = 1, // @location(1)
     },
 };
 
 /// Vertex buffer layout for the render pipeline.
-/// Stride of 20 bytes (5 floats), per-vertex stepping.
+/// Stride of 24 bytes (6 floats), per-vertex stepping.
 pub const vertex_buffer_layout: zgpu.wgpu.VertexBufferLayout = .{
     .array_stride = @sizeOf(Vertex), // 20 bytes
     .step_mode = .vertex, // Per-vertex data
@@ -995,6 +1007,21 @@ pub const Renderer = struct {
         return shader_module;
     }
 
+    /// Alpha blending state for transparency support.
+    /// Uses standard alpha blending: result = src * src_alpha + dst * (1 - src_alpha)
+    const alpha_blend_state: zgpu.wgpu.BlendState = .{
+        .color = .{
+            .src_factor = .src_alpha,
+            .dst_factor = .one_minus_src_alpha,
+            .operation = .add,
+        },
+        .alpha = .{
+            .src_factor = .one,
+            .dst_factor = .one_minus_src_alpha,
+            .operation = .add,
+        },
+    };
+
     /// Create the render pipeline for triangle rendering.
     /// Configures vertex and fragment stages, primitive topology, and output format.
     /// Returns null if pipeline creation fails.
@@ -1004,10 +1031,11 @@ pub const Renderer = struct {
         shader_module: zgpu.wgpu.ShaderModule,
     ) ?zgpu.wgpu.RenderPipeline {
         // Color target state for BGRA8Unorm output (matches swap chain format)
+        // Alpha blending enabled for transparency support.
         const color_target: zgpu.wgpu.ColorTargetState = .{
             .next_in_chain = null,
             .format = .bgra8_unorm,
-            .blend = null, // No blending for opaque triangles
+            .blend = &alpha_blend_state,
             .write_mask = .{ .red = true, .green = true, .blue = true, .alpha = true },
         };
 

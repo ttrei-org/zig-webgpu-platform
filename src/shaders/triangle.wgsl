@@ -29,14 +29,14 @@ struct Uniforms {
 // This will be populated from vertex buffers bound during rendering
 struct VertexInput {
     @location(0) position: vec2<f32>,  // 2D position in screen coordinates (pixels)
-    @location(1) color: vec3<f32>,     // RGB vertex color for interpolation
+    @location(1) color: vec4<f32>,     // RGBA vertex color for interpolation (with alpha)
 }
 
 // Vertex output / Fragment input structure
 // Data passed from vertex shader to fragment shader via rasterizer interpolation
 struct VertexOutput {
     @builtin(position) position: vec4<f32>,  // Clip-space position (required output)
-    @location(0) color: vec3<f32>,           // Interpolated color for fragment shader
+    @location(0) color: vec4<f32>,           // Interpolated RGBA color for fragment shader
 }
 
 // Vertex shader entry point
@@ -63,6 +63,6 @@ fn vs_main(input: VertexInput) -> VertexOutput {
 // Outputs the interpolated vertex color as the final pixel color
 @fragment
 fn fs_main(input: VertexOutput) -> @location(0) vec4<f32> {
-    // Output RGB color with full opacity (alpha = 1.0)
-    return vec4<f32>(input.color, 1.0);
+    // Output full RGBA color (alpha is interpolated from vertices)
+    return input.color;
 }
