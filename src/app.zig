@@ -319,6 +319,50 @@ pub const App = struct {
             },
             .{ Color.magenta, Color.magenta, Color.magenta },
         );
+
+        // Z-order test: Overlapping triangles to verify painter's algorithm.
+        // Since there is no depth buffer, draw order = depth order.
+        // Later-drawn triangles should appear on top of earlier ones.
+        // We draw three overlapping triangles with contrasting colors.
+        //
+        // Layout: Three triangles in upper-right quadrant, each partially
+        // overlapping the previous one. Draw order: Red -> Green -> Blue.
+        // Expected result: Blue on top, then Green, then Red at bottom.
+
+        const overlap_base_x: f32 = 280.0;
+        const overlap_base_y: f32 = 50.0;
+        const overlap_size: f32 = 50.0;
+        const overlap_offset: f32 = 20.0; // Horizontal offset between triangles
+
+        // First triangle (Red) - drawn first, should be at the bottom
+        renderer.queueTriangle(
+            .{
+                .{ overlap_base_x, overlap_base_y + overlap_size }, // Bottom-left
+                .{ overlap_base_x + overlap_size, overlap_base_y + overlap_size }, // Bottom-right
+                .{ overlap_base_x + overlap_size / 2.0, overlap_base_y }, // Top
+            },
+            .{ Color.red, Color.red, Color.red },
+        );
+
+        // Second triangle (Green) - drawn second, should be in the middle
+        renderer.queueTriangle(
+            .{
+                .{ overlap_base_x + overlap_offset, overlap_base_y + overlap_size }, // Bottom-left
+                .{ overlap_base_x + overlap_offset + overlap_size, overlap_base_y + overlap_size }, // Bottom-right
+                .{ overlap_base_x + overlap_offset + overlap_size / 2.0, overlap_base_y }, // Top
+            },
+            .{ Color.green, Color.green, Color.green },
+        );
+
+        // Third triangle (Blue) - drawn last, should be on top
+        renderer.queueTriangle(
+            .{
+                .{ overlap_base_x + 2.0 * overlap_offset, overlap_base_y + overlap_size }, // Bottom-left
+                .{ overlap_base_x + 2.0 * overlap_offset + overlap_size, overlap_base_y + overlap_size }, // Bottom-right
+                .{ overlap_base_x + 2.0 * overlap_offset + overlap_size / 2.0, overlap_base_y }, // Top
+            },
+            .{ Color.blue, Color.blue, Color.blue },
+        );
     }
 
     /// Get the current frame count.
