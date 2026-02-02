@@ -327,46 +327,97 @@ const wasm_exports = if (is_wasm) struct {
     const web = @import("platform/web.zig");
     const em = std.os.emscripten;
 
+    /// Static storage for global app state.
+    /// Using static variables because emscripten_set_main_loop with simulate_infinite_loop=1
+    /// doesn't return, so stack-allocated variables would be invalid when the callback runs.
+    /// The callback accesses these via web.global_app_state pointer.
+    var static_platform: web.WebPlatform = undefined;
+    var static_app: App = undefined;
+    var static_app_state: web.GlobalAppState = undefined;
+
     /// Main loop callback for web platform.
     /// Called by the browser each frame via emscripten_set_main_loop.
-    /// This function executes one iteration of the render loop.
+    /// This function executes one iteration of the update/render loop.
     ///
-    /// For now, this is a minimal stub that logs frame progress.
-    /// Full rendering requires WebGPU context from the browser (to be added in follow-up tasks).
+    /// Accesses App, Renderer, and Platform via the global_app_state pointer
+    /// since C function pointers cannot capture context.
+    ///
+    /// Currently handles update logic. Rendering requires WebGPU context
+    /// from the browser (to be added in follow-up tasks: bd-3bja).
     fn mainLoopCallback() callconv(.c) void {
-        if (web.global_web_platform) |platform| {
-            // Poll for events (updates frame counter and processes browser events)
-            platform.pollEvents();
+        const state = web.global_app_state orelse {
+            log.warn("web main loop callback: app state not initialized", .{});
+            return;
+        };
 
-            // Log progress occasionally (every 60 frames = ~1 second at 60 FPS)
-            if (platform.frame_count % 60 == 1) {
-                log.info("web frame {}", .{platform.frame_count});
-            }
+        // Calculate delta time from last frame
+        const current_time = em.emscripten_get_now();
+        var delta_time: f32 = @floatCast((current_time - state.last_frame_time) / 1000.0);
+        state.last_frame_time = current_time;
 
-            // Check if quit was requested
-            if (platform.shouldClose()) {
-                log.info("quit requested, cancelling main loop", .{});
-                em.emscripten_cancel_main_loop();
-            }
-        } else {
-            // Platform not initialized - this shouldn't happen
-            log.warn("web main loop callback: platform not initialized", .{});
+        // Cap delta time to prevent large jumps (e.g., when tab is backgrounded)
+        if (delta_time > MAX_DELTA_TIME) {
+            delta_time = MAX_DELTA_TIME;
+        }
+
+        // Poll for events (updates frame counter and processes browser events)
+        state.platform.pollEvents();
+
+        // Get mouse state from platform
+        const mouse_state = state.platform.getMouseState();
+
+        // Update application state
+        state.app.update(delta_time, mouse_state);
+
+        // Log progress occasionally (every 60 frames = ~1 second at 60 FPS)
+        if (state.platform.frame_count % 60 == 1) {
+            log.info("web frame {} (dt={d:.3}s)", .{ state.platform.frame_count, delta_time });
+        }
+
+        // TODO (bd-3bja): Render frame using state.renderer when WebGPU is available
+        // if (state.renderer) |renderer| {
+        //     // Begin frame, render, end frame
+        // }
+
+        // Check if quit was requested or app stopped running
+        if (state.platform.shouldClose() or !state.app.isRunning()) {
+            log.info("quit requested, cancelling main loop", .{});
+            em.emscripten_cancel_main_loop();
         }
     }
 
     /// Entry point called from JavaScript.
     /// Exported as 'wasm_main' and called from JavaScript after WASM module instantiation.
     /// Uses emscripten_set_main_loop to integrate with the browser's requestAnimationFrame.
+    ///
+    /// Initializes:
+    /// 1. WebPlatform - for input and canvas management
+    /// 2. App - application state and logic
+    /// 3. GlobalAppState - ties platform, app, and renderer together for callback access
+    ///
+    /// The global state is stored in static variables to survive across callback invocations.
     pub fn wasm_main() callconv(.c) void {
         log.info("wasm_main: initializing web platform", .{});
 
-        // Initialize web platform
-        var platform = web.WebPlatform.init(std.heap.page_allocator);
+        // Initialize web platform in static storage
+        static_platform = web.WebPlatform.init(std.heap.page_allocator);
 
-        // Set the global platform for JavaScript callbacks
-        web.setGlobalPlatform(&platform);
+        // Initialize application state in static storage
+        static_app = App.init(std.heap.page_allocator);
 
-        log.info("wasm_main: starting main loop with emscripten_set_main_loop", .{});
+        // Initialize global app state struct with platform and app pointers.
+        // Renderer is null initially - will be set when WebGPU is initialized.
+        static_app_state = .{
+            .platform = &static_platform,
+            .app = &static_app,
+            .renderer = null, // Set later via web.setGlobalRenderer() when WebGPU is ready
+            .last_frame_time = em.emscripten_get_now(),
+        };
+
+        // Set the global state pointer for callback access
+        web.initGlobalAppState(&static_app_state);
+
+        log.info("wasm_main: platform and app initialized, starting main loop", .{});
 
         // Start the main loop using emscripten_set_main_loop.
         // Parameters:
@@ -378,8 +429,8 @@ const wasm_exports = if (is_wasm) struct {
         // will be called each frame by the browser, typically at 60 FPS.
         //
         // Note: With simulate_infinite_loop=1, this function never returns.
-        // The platform and any app state must either be static/global or passed via
-        // emscripten_set_main_loop_arg's user_data pointer (to be added in bd-13b).
+        // The platform and app state are stored in static variables and accessed
+        // via global_app_state pointer from the callback.
         em.emscripten_set_main_loop(mainLoopCallback, 0, 1);
 
         // This line is never reached because simulate_infinite_loop=1

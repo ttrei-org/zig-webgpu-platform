@@ -796,14 +796,96 @@ pub const WebPlatform = struct {
 /// Public to allow access from the main loop callback in main.zig.
 pub var global_web_platform: ?*WebPlatform = null;
 
+// Import App and Renderer types.
+// These are forward-declared here to avoid circular dependencies since web.zig
+// is only compiled for WASM targets where these modules exist.
+const App = @import("../app.zig").App;
+const Renderer = @import("../renderer.zig").Renderer;
+
+/// Global state for the Emscripten main loop callback.
+/// The callback is a C function pointer that cannot capture context, so we
+/// store App and Renderer pointers here for access from the callback.
+///
+/// This struct groups all runtime state needed by mainLoopCallback():
+/// - platform: WebPlatform for input/window management
+/// - app: Application state and logic
+/// - renderer: WebGPU rendering context (null until WebGPU is initialized)
+///
+/// All pointers must be initialized before calling emscripten_set_main_loop.
+/// The callback accesses these via the global `global_app_state` variable.
+pub const GlobalAppState = struct {
+    /// Web platform for input handling and canvas management.
+    platform: *WebPlatform,
+    /// Application state containing game logic and UI.
+    app: *App,
+    /// WebGPU renderer for drawing. Null until WebGPU context is obtained.
+    /// On web, WebGPU initialization is asynchronous and happens after
+    /// the main loop starts, so this may be null during initial frames.
+    renderer: ?*Renderer,
+    /// Frame timing: timestamp of last frame (milliseconds from emscripten_get_now).
+    last_frame_time: f64,
+};
+
+/// Global application state for the Emscripten main loop callback.
+/// Must be initialized via initGlobalAppState() before starting the main loop.
+/// This is separate from global_web_platform to support the full app lifecycle.
+pub var global_app_state: ?*GlobalAppState = null;
+
+/// Initialize the global application state for main loop callback access.
+/// Call this after creating WebPlatform and App, but before emscripten_set_main_loop.
+///
+/// Parameters:
+/// - state: Pointer to GlobalAppState struct with initialized platform and app.
+///   The struct must outlive the main loop (typically static or heap-allocated).
+///
+/// Note: The renderer field in state can be null initially. Set it via
+/// setGlobalRenderer() once WebGPU is initialized.
+pub fn initGlobalAppState(state: *GlobalAppState) void {
+    global_app_state = state;
+    // Also set the platform global for backward compatibility with event handlers
+    global_web_platform = state.platform;
+    log.info("global app state initialized for main loop callback", .{});
+}
+
+/// Set the renderer reference in the global app state.
+/// Call this after WebGPU initialization completes (asynchronously on web).
+///
+/// Prerequisites:
+/// - initGlobalAppState() must have been called first
+///
+/// Parameters:
+/// - renderer: Pointer to initialized Renderer
+pub fn setGlobalRenderer(renderer: *Renderer) void {
+    if (global_app_state) |state| {
+        state.renderer = renderer;
+        log.info("global renderer set for main loop callback", .{});
+    } else {
+        log.warn("setGlobalRenderer called before initGlobalAppState", .{});
+    }
+}
+
+/// Clear the global application state.
+/// Should be called during cleanup to prevent dangling pointer access.
+pub fn clearGlobalAppState() void {
+    global_app_state = null;
+    global_web_platform = null;
+    log.info("global app state cleared", .{});
+}
+
 /// Set the global web platform instance for JavaScript callbacks.
 /// Must be called after WebPlatform.init() to enable event handling.
+///
+/// Note: Prefer using initGlobalAppState() which sets this automatically.
+/// This function is kept for backward compatibility.
 pub fn setGlobalPlatform(p: *WebPlatform) void {
     global_web_platform = p;
 }
 
 /// Clear the global web platform instance.
 /// Should be called before WebPlatform.deinit() to prevent dangling pointer.
+///
+/// Note: Prefer using clearGlobalAppState() which clears this automatically.
+/// This function is kept for backward compatibility.
 pub fn clearGlobalPlatform() void {
     global_web_platform = null;
 }
