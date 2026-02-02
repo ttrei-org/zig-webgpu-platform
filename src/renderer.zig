@@ -7,8 +7,17 @@
 const std = @import("std");
 const builtin = @import("builtin");
 const zgpu = @import("zgpu");
-const zglfw = @import("zglfw");
 const zigimg = @import("zigimg");
+
+/// True if building for native desktop (not emscripten/web)
+const is_native = builtin.os.tag != .emscripten;
+
+/// zglfw is only available on native desktop builds.
+/// On emscripten, we provide an opaque type stub since the renderer
+/// doesn't use GLFW window handles on web (browser provides WebGPU surface).
+const zglfw = if (is_native) @import("zglfw") else struct {
+    pub const Window = opaque {};
+};
 const render_target = @import("render_target.zig");
 
 pub const RenderTarget = render_target.RenderTarget;
