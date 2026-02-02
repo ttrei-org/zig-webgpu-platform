@@ -98,6 +98,15 @@ pub const DesktopPlatform = struct {
         };
 
         self.window = window;
+
+        // Store platform pointer in GLFW window user pointer for callback access.
+        // GLFW callbacks are C functions that receive only the window pointer,
+        // so we use the user pointer to access our platform state.
+        window.setUserPointer(self);
+
+        // Register GLFW input callbacks
+        _ = window.setCursorPosCallback(cursorPosCallback);
+
         log.info("window created successfully: {}x{}", .{ width, height });
     }
 
@@ -160,6 +169,19 @@ pub const DesktopPlatform = struct {
     /// Returns the stored mouse state which is updated by GLFW callbacks.
     pub fn getMouseState(self: *const Self) MouseState {
         return self.mouse_state;
+    }
+
+    /// GLFW cursor position callback.
+    /// Updates the mouse state with the new cursor position.
+    /// This is a C-compatible callback function that retrieves the platform
+    /// pointer from the GLFW window user pointer.
+    fn cursorPosCallback(window: *zglfw.Window, xpos: f64, ypos: f64) callconv(.c) void {
+        const self = window.getUserPointer(Self) orelse {
+            log.warn("cursor callback: no user pointer set", .{});
+            return;
+        };
+        self.mouse_state.x = @floatCast(xpos);
+        self.mouse_state.y = @floatCast(ypos);
     }
 
     /// Convert platform-agnostic Key to GLFW key code.
