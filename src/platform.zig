@@ -59,6 +59,22 @@ pub const MouseState = struct {
     right_pressed: bool,
     /// Middle mouse button is pressed.
     middle_pressed: bool,
+
+    /// Check if a button is currently pressed.
+    pub fn isPressed(self: MouseState, button: MouseButton) bool {
+        return switch (button) {
+            .left => self.left_pressed,
+            .right => self.right_pressed,
+            .middle => self.middle_pressed,
+        };
+    }
+
+    /// Detect if a button was just pressed this frame.
+    /// Returns true if the button is pressed now but was not pressed in the previous state.
+    /// Useful for triggering one-shot actions on click (e.g., button activation, selection).
+    pub fn buttonJustPressed(current: MouseState, prev: MouseState, button: MouseButton) bool {
+        return current.isPressed(button) and !prev.isPressed(button);
+    }
 };
 
 /// Key identifiers for keyboard input.
@@ -175,3 +191,61 @@ pub const Platform = struct {
         return self.getWindowFn(self);
     }
 };
+
+test "MouseState.isPressed returns correct button state" {
+    const state: MouseState = .{
+        .x = 0,
+        .y = 0,
+        .left_pressed = true,
+        .right_pressed = false,
+        .middle_pressed = true,
+    };
+
+    try std.testing.expect(state.isPressed(.left));
+    try std.testing.expect(!state.isPressed(.right));
+    try std.testing.expect(state.isPressed(.middle));
+}
+
+test "MouseState.buttonJustPressed detects press transitions" {
+    const prev: MouseState = .{
+        .x = 0,
+        .y = 0,
+        .left_pressed = false,
+        .right_pressed = true,
+        .middle_pressed = false,
+    };
+    const current: MouseState = .{
+        .x = 10,
+        .y = 20,
+        .left_pressed = true, // Just pressed
+        .right_pressed = true, // Still held
+        .middle_pressed = false, // Still released
+    };
+
+    // Left was just pressed (false -> true)
+    try std.testing.expect(MouseState.buttonJustPressed(current, prev, .left));
+    // Right is held, not just pressed (true -> true)
+    try std.testing.expect(!MouseState.buttonJustPressed(current, prev, .right));
+    // Middle is still released (false -> false)
+    try std.testing.expect(!MouseState.buttonJustPressed(current, prev, .middle));
+}
+
+test "MouseState.buttonJustPressed returns false on release" {
+    const prev: MouseState = .{
+        .x = 0,
+        .y = 0,
+        .left_pressed = true,
+        .right_pressed = false,
+        .middle_pressed = false,
+    };
+    const current: MouseState = .{
+        .x = 0,
+        .y = 0,
+        .left_pressed = false, // Just released
+        .right_pressed = false,
+        .middle_pressed = false,
+    };
+
+    // Left was released, not pressed (true -> false)
+    try std.testing.expect(!MouseState.buttonJustPressed(current, prev, .left));
+}
