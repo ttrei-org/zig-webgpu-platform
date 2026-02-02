@@ -112,7 +112,7 @@ pub fn main() void {
         platform.pollEvents();
 
         // Exit on Escape key
-        if (platform.isKeyPressed(desktop.DesktopPlatform.Key.escape)) {
+        if (platform.isGlfwKeyPressed(zglfw.Key.escape)) {
             app.requestQuit();
             continue;
         }
