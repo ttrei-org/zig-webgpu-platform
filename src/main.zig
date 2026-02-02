@@ -374,10 +374,28 @@ const wasm_exports = if (is_wasm) struct {
             log.info("web frame {} (dt={d:.3}s)", .{ state.platform.frame_count, delta_time });
         }
 
-        // TODO (bd-3bja): Render frame using state.renderer when WebGPU is available
-        // if (state.renderer) |renderer| {
-        //     // Begin frame, render, end frame
-        // }
+        // Render frame if renderer and render target are available.
+        // On web, WebGPU initialization is asynchronous so renderer may be null initially.
+        if (state.renderer) |renderer| {
+            if (state.render_target) |render_target| {
+                // Begin frame
+                const frame_state = renderer.beginFrame(render_target) catch |err| {
+                    if (err != renderer_mod.RendererError.BeginFrameFailed) {
+                        log.warn("web beginFrame failed: {}", .{err});
+                    }
+                    return;
+                };
+
+                // Render: clear, draw app content, flush batch
+                const render_pass = Renderer.beginRenderPass(frame_state, Renderer.cornflower_blue);
+                state.app.render(renderer);
+                renderer.flushBatch(render_pass);
+                Renderer.endRenderPass(render_pass);
+
+                // End frame and present
+                renderer.endFrame(frame_state, render_target);
+            }
+        }
 
         // Check if quit was requested or app stopped running
         if (state.platform.shouldClose() or !state.app.isRunning()) {
@@ -406,12 +424,13 @@ const wasm_exports = if (is_wasm) struct {
         static_app = App.init(std.heap.page_allocator);
 
         // Initialize global app state struct with platform and app pointers.
-        // Renderer is null initially - will be set when WebGPU is initialized.
+        // Renderer and render_target are null initially - will be set when WebGPU is initialized.
         static_app_state = .{
             .platform = &static_platform,
             .app = &static_app,
             .renderer = null, // Set later via web.setGlobalRenderer() when WebGPU is ready
             .last_frame_time = em.emscripten_get_now(),
+            .render_target = null, // Set later via web.setGlobalRenderTarget() when WebGPU is ready
         };
 
         // Set the global state pointer for callback access

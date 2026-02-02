@@ -800,7 +800,9 @@ pub var global_web_platform: ?*WebPlatform = null;
 // These are forward-declared here to avoid circular dependencies since web.zig
 // is only compiled for WASM targets where these modules exist.
 const App = @import("../app.zig").App;
-const Renderer = @import("../renderer.zig").Renderer;
+const renderer_mod = @import("../renderer.zig");
+const Renderer = renderer_mod.Renderer;
+const RenderTarget = @import("../render_target.zig").RenderTarget;
 
 /// Global state for the Emscripten main loop callback.
 /// The callback is a C function pointer that cannot capture context, so we
@@ -810,6 +812,7 @@ const Renderer = @import("../renderer.zig").Renderer;
 /// - platform: WebPlatform for input/window management
 /// - app: Application state and logic
 /// - renderer: WebGPU rendering context (null until WebGPU is initialized)
+/// - render_target: RenderTarget for the current frame (null until initialized)
 ///
 /// All pointers must be initialized before calling emscripten_set_main_loop.
 /// The callback accesses these via the global `global_app_state` variable.
@@ -824,6 +827,9 @@ pub const GlobalAppState = struct {
     renderer: ?*Renderer,
     /// Frame timing: timestamp of last frame (milliseconds from emscripten_get_now).
     last_frame_time: f64,
+    /// Render target for frame rendering. Must be initialized after renderer.
+    /// This is a pointer to an externally-owned SwapChainRenderTarget.
+    render_target: ?*RenderTarget,
 };
 
 /// Global application state for the Emscripten main loop callback.
@@ -861,6 +867,24 @@ pub fn setGlobalRenderer(renderer: *Renderer) void {
         log.info("global renderer set for main loop callback", .{});
     } else {
         log.warn("setGlobalRenderer called before initGlobalAppState", .{});
+    }
+}
+
+/// Set the render target reference in the global app state.
+/// Call this after creating the render target from the renderer.
+///
+/// Prerequisites:
+/// - initGlobalAppState() must have been called first
+/// - setGlobalRenderer() should have been called to set up the renderer
+///
+/// Parameters:
+/// - render_target: Pointer to initialized RenderTarget (e.g., from SwapChainRenderTarget.asRenderTarget())
+pub fn setGlobalRenderTarget(render_target: *RenderTarget) void {
+    if (global_app_state) |state| {
+        state.render_target = render_target;
+        log.info("global render target set for main loop callback", .{});
+    } else {
+        log.warn("setGlobalRenderTarget called before initGlobalAppState", .{});
     }
 }
 
