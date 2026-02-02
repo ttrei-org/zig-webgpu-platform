@@ -31,6 +31,9 @@ pub const DesktopPlatform = struct {
     window: ?*zglfw.Window,
     allocator: std.mem.Allocator,
     glfw_initialized: bool,
+    /// Current mouse state, updated by GLFW callbacks.
+    /// This maintains live input state between callback updates.
+    mouse_state: MouseState,
 
     /// Initialize the desktop platform.
     /// Initializes GLFW and sets window hints for WebGPU (no OpenGL context).
@@ -52,6 +55,13 @@ pub const DesktopPlatform = struct {
             .window = null,
             .allocator = allocator,
             .glfw_initialized = true,
+            .mouse_state = .{
+                .x = 0,
+                .y = 0,
+                .left_pressed = false,
+                .right_pressed = false,
+                .middle_pressed = false,
+            },
         };
     }
 
@@ -147,27 +157,9 @@ pub const DesktopPlatform = struct {
     }
 
     /// Get the current mouse state.
+    /// Returns the stored mouse state which is updated by GLFW callbacks.
     pub fn getMouseState(self: *const Self) MouseState {
-        if (self.window) |window| {
-            const pos = window.getCursorPos();
-            const left = window.getMouseButton(.left) == .press;
-            const right = window.getMouseButton(.right) == .press;
-            const middle = window.getMouseButton(.middle) == .press;
-            return .{
-                .x = @floatCast(pos[0]),
-                .y = @floatCast(pos[1]),
-                .left_pressed = left,
-                .right_pressed = right,
-                .middle_pressed = middle,
-            };
-        }
-        return .{
-            .x = 0,
-            .y = 0,
-            .left_pressed = false,
-            .right_pressed = false,
-            .middle_pressed = false,
-        };
+        return self.mouse_state;
     }
 
     /// Convert platform-agnostic Key to GLFW key code.
