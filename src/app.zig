@@ -87,17 +87,74 @@ pub const App = struct {
     pub fn render(self: *const Self, renderer: *Renderer) void {
         _ = self;
 
-        // Queue multiple triangles to verify batched rendering works correctly.
-        // Coordinates are in pixels, origin at top-left.
-        // For a 400x300 window, triangles are positioned across the viewport.
+        // Static test pattern demonstrating the triangle API.
+        // Creates a radial "starburst" pattern with triangles emanating from center,
+        // plus corner accent triangles. Showcases Color constants and helpers.
+        //
+        // Window is 400x300. Center at (200, 150).
 
-        // Triangle 1: Large centered RGB triangle (classic test pattern)
-        // Uses Color constants for primary colors.
+        const center_x: f32 = 200.0;
+        const center_y: f32 = 150.0;
+
+        // Radial triangles forming a starburst pattern around the center.
+        // Each triangle has its apex at the center and base on an outer arc.
+        // Colors cycle through the spectrum for a rainbow effect.
+        const radial_colors = [_]Color{
+            Color.red,
+            Color.fromHex(0xFF8000), // Orange
+            Color.yellow,
+            Color.green,
+            Color.cyan,
+            Color.blue,
+            Color.fromHex(0x8000FF), // Purple
+            Color.magenta,
+        };
+
+        const num_spokes: usize = 8;
+        const inner_radius: f32 = 20.0; // Small gap at center
+        const outer_radius: f32 = 110.0;
+
+        for (0..num_spokes) |i| {
+            // Angle for this spoke (evenly distributed around circle)
+            const angle: f32 = @as(f32, @floatFromInt(i)) * (std.math.tau / @as(f32, @floatFromInt(num_spokes)));
+            const next_angle: f32 = angle + std.math.tau / @as(f32, @floatFromInt(num_spokes));
+            const mid_angle: f32 = (angle + next_angle) / 2.0;
+
+            // Calculate spoke triangle vertices
+            // Apex at inner radius, base at outer radius
+            const apex_x = center_x + inner_radius * @cos(mid_angle);
+            const apex_y = center_y + inner_radius * @sin(mid_angle);
+
+            // Base vertices at outer radius, offset by half-width perpendicular to spoke
+            const base_left_x = center_x + outer_radius * @cos(angle);
+            const base_left_y = center_y + outer_radius * @sin(angle);
+            const base_right_x = center_x + outer_radius * @cos(next_angle);
+            const base_right_y = center_y + outer_radius * @sin(next_angle);
+
+            const base_color = radial_colors[i];
+            // Create gradient by darkening the base color at the apex
+            const apex_color = Color.rgb(base_color.r * 0.3, base_color.g * 0.3, base_color.b * 0.3);
+
+            renderer.queueTriangle(
+                .{
+                    .{ apex_x, apex_y },
+                    .{ base_left_x, base_left_y },
+                    .{ base_right_x, base_right_y },
+                },
+                .{
+                    apex_color, // Dark at center
+                    base_color, // Bright at edge
+                    base_color, // Bright at edge
+                },
+            );
+        }
+
+        // Central triangle using classic RGB gradient (demonstrates color interpolation)
         renderer.queueTriangle(
             .{
-                .{ 100.0, 225.0 }, // Bottom-left
-                .{ 300.0, 225.0 }, // Bottom-right
-                .{ 200.0, 75.0 }, // Top-center
+                .{ center_x, center_y - 15.0 }, // Top
+                .{ center_x - 13.0, center_y + 8.0 }, // Bottom-left
+                .{ center_x + 13.0, center_y + 8.0 }, // Bottom-right
             },
             .{
                 Color.red,
@@ -106,63 +163,61 @@ pub const App = struct {
             },
         );
 
-        // Triangle 2: Small yellow triangle (top-left corner)
-        // Uses Color.rgb() helper for custom colors.
+        // Corner accent triangles demonstrating various Color API methods
+
+        // Top-left: Yellow tones using Color constant and rgb() helper
         renderer.queueTriangle(
             .{
-                .{ 20.0, 80.0 }, // Bottom-left
-                .{ 80.0, 80.0 }, // Bottom-right
-                .{ 50.0, 20.0 }, // Top-center
+                .{ 10.0, 50.0 },
+                .{ 50.0, 50.0 },
+                .{ 30.0, 10.0 },
             },
             .{
-                Color.yellow, // Yellow constant
+                Color.yellow,
                 Color.rgb(1.0, 0.8, 0.0), // Orange-yellow
-                Color.rgb(1.0, 1.0, 0.2), // Light yellow
+                Color.rgb(1.0, 1.0, 0.5), // Light yellow
             },
         );
 
-        // Triangle 3: Small cyan triangle (top-right corner)
-        // Uses Color constant and Color.rgb() helper.
+        // Top-right: Cyan tones using Color constant and rgb() helper
         renderer.queueTriangle(
             .{
-                .{ 320.0, 80.0 }, // Bottom-left
-                .{ 380.0, 80.0 }, // Bottom-right
-                .{ 350.0, 20.0 }, // Top-center
+                .{ 350.0, 50.0 },
+                .{ 390.0, 50.0 },
+                .{ 370.0, 10.0 },
             },
             .{
                 Color.cyan,
-                Color.rgb(0.0, 0.8, 1.0), // Light blue
-                Color.rgb(0.2, 1.0, 1.0), // Bright cyan
+                Color.rgb(0.0, 0.8, 1.0), // Sky blue
+                Color.rgb(0.5, 1.0, 1.0), // Light cyan
             },
         );
 
-        // Triangle 4: Small magenta triangle (bottom-left corner)
-        // Uses Color constant and Color.rgb() helper.
+        // Bottom-left: Magenta tones using Color constant and fromHex() helper
         renderer.queueTriangle(
             .{
-                .{ 20.0, 280.0 }, // Bottom-left
-                .{ 80.0, 280.0 }, // Bottom-right
-                .{ 50.0, 240.0 }, // Top-center
+                .{ 10.0, 250.0 },
+                .{ 50.0, 250.0 },
+                .{ 30.0, 290.0 },
             },
             .{
                 Color.magenta,
-                Color.rgb(0.8, 0.0, 1.0), // Purple
-                Color.rgb(1.0, 0.2, 1.0), // Light magenta
+                Color.fromHex(0xFF00AA), // Pink-magenta
+                Color.fromHex(0xAA00FF), // Purple
             },
         );
 
-        // Triangle 5: Small white/gray triangle (bottom-right corner)
-        // Uses Color.rgb() helper for grayscale tones.
+        // Bottom-right: Grayscale using rgb() for precise control
         renderer.queueTriangle(
             .{
-                .{ 320.0, 280.0 }, // Bottom-left
-                .{ 380.0, 280.0 }, // Bottom-right
-                .{ 350.0, 240.0 }, // Top-center
+                .{ 350.0, 250.0 },
+                .{ 390.0, 250.0 },
+                .{ 370.0, 290.0 },
             },
             .{
-                Color.rgb(0.8, 0.8, 0.8), // Light gray
                 Color.white,
-                Color.rgb(0.6, 0.6, 0.6), // Medium gray
+                Color.rgb(0.7, 0.7, 0.7), // Light gray
+                Color.rgb(0.4, 0.4, 0.4), // Medium gray
             },
         );
     }
