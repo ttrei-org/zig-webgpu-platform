@@ -319,10 +319,14 @@ test "Dimensions struct size and alignment" {
 /// - RENDER_ATTACHMENT: enables using the texture as a render target
 /// - COPY_SRC: enables reading pixels back to CPU for screenshots
 ///
+/// A staging buffer is created for GPU-to-CPU pixel readback with:
+/// - COPY_DST: allows copying from the offscreen texture
+/// - MAP_READ: allows CPU access to read pixel data
+///
 /// Lifecycle:
 /// 1. Create with init() specifying device and dimensions
 /// 2. Each frame: getTextureView() -> render -> present() (no-op for offscreen)
-/// 3. On resize: call resize() to recreate the texture
+/// 3. On resize: call resize() to recreate the texture and staging buffer
 /// 4. Call deinit() to release GPU resources
 pub const OffscreenRenderTarget = struct {
     const Self = @This();
@@ -331,6 +335,10 @@ pub const OffscreenRenderTarget = struct {
     texture: zgpu.wgpu.Texture,
     /// Texture view for render pass attachment.
     texture_view: zgpu.wgpu.TextureView,
+    /// Staging buffer for GPU-to-CPU pixel readback.
+    /// Size = aligned_bytes_per_row * height.
+    /// Usage: COPY_DST (receive copies from texture) | MAP_READ (CPU access).
+    staging_buffer: zgpu.wgpu.Buffer,
     /// WebGPU device needed for texture recreation on resize.
     device: zgpu.wgpu.Device,
     /// Current width in pixels.
@@ -340,12 +348,30 @@ pub const OffscreenRenderTarget = struct {
     /// The RenderTarget interface that delegates to this implementation.
     render_target: RenderTarget,
 
+    /// WebGPU requires buffer row alignment of 256 bytes for texture copies.
+    const copy_bytes_per_row_alignment: u32 = 256;
+
+    /// Align a value up to a multiple of alignment.
+    fn alignUp(value: u32, alignment: u32) u32 {
+        return (value + alignment - 1) / alignment * alignment;
+    }
+
+    /// Calculate the aligned bytes per row for a given width (RGBA8 = 4 bytes per pixel).
+    fn calcAlignedBytesPerRow(width: u32) u32 {
+        const unaligned = width * 4;
+        return alignUp(unaligned, copy_bytes_per_row_alignment);
+    }
+
     /// Initialize an OffscreenRenderTarget with the specified dimensions.
     ///
     /// Creates a texture with:
     /// - Format: RGBA8Unorm (for easy PNG export)
     /// - Usage: RENDER_ATTACHMENT | COPY_SRC
     /// - Dimension: 2D
+    ///
+    /// Also creates a staging buffer for GPU readback with:
+    /// - Size: aligned_bytes_per_row * height
+    /// - Usage: COPY_DST | MAP_READ
     ///
     /// Parameters:
     /// - device: WebGPU device for resource creation
@@ -354,10 +380,12 @@ pub const OffscreenRenderTarget = struct {
     pub fn init(device: zgpu.wgpu.Device, width: u32, height: u32) Self {
         const texture = createOffscreenTexture(device, width, height);
         const texture_view = createTextureView(texture);
+        const staging_buffer = createStagingBuffer(device, width, height);
 
         var self: Self = .{
             .texture = texture,
             .texture_view = texture_view,
+            .staging_buffer = staging_buffer,
             .device = device,
             .width = width,
             .height = height,
@@ -374,13 +402,16 @@ pub const OffscreenRenderTarget = struct {
             .resizeFn = &resizeImpl,
         };
 
-        log.info("offscreen render target created: {}x{}", .{ width, height });
+        const aligned_bytes_per_row = calcAlignedBytesPerRow(width);
+        const buffer_size: u64 = @as(u64, aligned_bytes_per_row) * @as(u64, height);
+        log.info("offscreen render target created: {}x{} (staging buffer: {} bytes)", .{ width, height, buffer_size });
         return self;
     }
 
     /// Release all GPU resources held by this target.
     /// Must be called before the device is released.
     pub fn deinit(self: *Self) void {
+        self.staging_buffer.release();
         self.texture_view.release();
         self.texture.release();
         log.debug("offscreen render target resources released", .{});
@@ -399,6 +430,25 @@ pub const OffscreenRenderTarget = struct {
     /// Use this with copyTextureToBuffer for screenshot capture.
     pub fn getTexture(self: *const Self) zgpu.wgpu.Texture {
         return self.texture;
+    }
+
+    /// Get the staging buffer for GPU-to-CPU pixel readback.
+    /// Use this with copyTextureToBuffer and buffer mapping for screenshot capture.
+    /// The buffer is sized for aligned row data: aligned_bytes_per_row * height.
+    pub fn getStagingBuffer(self: *const Self) zgpu.wgpu.Buffer {
+        return self.staging_buffer;
+    }
+
+    /// Get the aligned bytes per row for the staging buffer.
+    /// WebGPU requires 256-byte alignment for texture copy operations.
+    pub fn getAlignedBytesPerRow(self: *const Self) u32 {
+        return calcAlignedBytesPerRow(self.width);
+    }
+
+    /// Get the total size of the staging buffer in bytes.
+    pub fn getStagingBufferSize(self: *const Self) u64 {
+        const aligned_bytes_per_row = calcAlignedBytesPerRow(self.width);
+        return @as(u64, aligned_bytes_per_row) * @as(u64, self.height);
     }
 
     // Implementation functions for the RenderTarget interface.
@@ -439,16 +489,20 @@ pub const OffscreenRenderTarget = struct {
         }
 
         // Release old resources.
+        self.staging_buffer.release();
         self.texture_view.release();
         self.texture.release();
 
-        // Create new texture with updated dimensions.
+        // Create new resources with updated dimensions.
         self.texture = createOffscreenTexture(self.device, width, height);
         self.texture_view = createTextureView(self.texture);
+        self.staging_buffer = createStagingBuffer(self.device, width, height);
         self.width = width;
         self.height = height;
 
-        log.info("offscreen render target resized to {}x{}", .{ width, height });
+        const aligned_bytes_per_row = calcAlignedBytesPerRow(width);
+        const buffer_size: u64 = @as(u64, aligned_bytes_per_row) * @as(u64, height);
+        log.info("offscreen render target resized to {}x{} (staging buffer: {} bytes)", .{ width, height, buffer_size });
     }
 
     /// Create an offscreen texture with RENDER_ATTACHMENT | COPY_SRC usage.
@@ -483,6 +537,26 @@ pub const OffscreenRenderTarget = struct {
             .base_array_layer = 0,
             .array_layer_count = 1,
             .aspect = .all,
+        });
+    }
+
+    /// Create a staging buffer for GPU-to-CPU pixel readback.
+    /// The buffer is configured with COPY_DST | MAP_READ usage:
+    /// - COPY_DST: allows copying from the offscreen texture via copyTextureToBuffer
+    /// - MAP_READ: allows CPU access to read pixel data via mapAsync/getMappedRange
+    ///
+    /// Size is calculated as aligned_bytes_per_row * height to satisfy WebGPU's
+    /// 256-byte row alignment requirement for texture copies.
+    fn createStagingBuffer(device: zgpu.wgpu.Device, width: u32, height: u32) zgpu.wgpu.Buffer {
+        const aligned_bytes_per_row = calcAlignedBytesPerRow(width);
+        const buffer_size: u64 = @as(u64, aligned_bytes_per_row) * @as(u64, height);
+
+        return device.createBuffer(.{
+            .next_in_chain = null,
+            .label = "Offscreen Staging Buffer",
+            .usage = .{ .copy_dst = true, .map_read = true },
+            .size = buffer_size,
+            .mapped_at_creation = .false,
         });
     }
 };
