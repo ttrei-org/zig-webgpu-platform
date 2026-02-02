@@ -2202,6 +2202,13 @@ pub const Renderer = struct {
 
     /// Write pixel data to a PNG file using zigimg.
     /// Converts BGRA to RGBA and writes to PNG format.
+    ///
+    /// Handles common file I/O errors with user-friendly messages:
+    /// - Directory doesn't exist (FileNotFound)
+    /// - Permission denied (AccessDenied, PermissionDenied)
+    /// - Disk full (NoSpaceLeft, DiskQuota)
+    ///
+    /// Logs success with file path and size.
     fn writePngFile(
         self: *Self,
         filename: []const u8,
@@ -2242,16 +2249,27 @@ pub const Renderer = struct {
             .animation = .{},
         };
 
-        // Write to PNG file
+        // Write PNG file to disk with error handling
         var write_buffer: [1024 * 1024]u8 = undefined;
         image.writeToFilePath(allocator, filename, &write_buffer, .{ .png = .{} }) catch |err| {
-            log.err("zigimg writeToFilePath failed: {}", .{err});
+            logPngWriteError(err, filename);
             return err;
         };
+
+        // Log success with file path and size
+        const file_size = getFileSize(filename);
+        log.info("PNG file written: {s} ({} bytes, {}x{} pixels)", .{ filename, file_size, width, height });
     }
 
     /// Write pixel data to a PNG file using zigimg.
     /// Data is already in RGBA format (from offscreen render target).
+    ///
+    /// Handles common file I/O errors with user-friendly messages:
+    /// - Directory doesn't exist (FileNotFound)
+    /// - Permission denied (AccessDenied, PermissionDenied)
+    /// - Disk full (NoSpaceLeft, DiskQuota)
+    ///
+    /// Logs success with file path and size.
     fn writePngFileRgba(
         self: *Self,
         filename: []const u8,
@@ -2292,12 +2310,35 @@ pub const Renderer = struct {
             .animation = .{},
         };
 
-        // Write to PNG file
+        // Write PNG file to disk with error handling
         var write_buffer: [1024 * 1024]u8 = undefined;
         image.writeToFilePath(allocator, filename, &write_buffer, .{ .png = .{} }) catch |err| {
-            log.err("zigimg writeToFilePath failed: {}", .{err});
+            logPngWriteError(err, filename);
             return err;
         };
+
+        // Log success with file path and size
+        const file_size = getFileSize(filename);
+        log.info("PNG file written: {s} ({} bytes, {}x{} pixels)", .{ filename, file_size, width, height });
+    }
+
+    /// Log user-friendly error messages for PNG file write failures.
+    /// Maps low-level errors to actionable messages.
+    fn logPngWriteError(err: anyerror, filename: []const u8) void {
+        switch (err) {
+            error.FileNotFound => log.err("failed to write PNG: directory does not exist for path '{s}'", .{filename}),
+            error.AccessDenied => log.err("failed to write PNG: permission denied for '{s}'", .{filename}),
+            error.PermissionDenied => log.err("failed to write PNG: permission denied for '{s}'", .{filename}),
+            error.NoSpaceLeft => log.err("failed to write PNG: disk full, cannot write '{s}'", .{filename}),
+            error.DiskQuota => log.err("failed to write PNG: disk quota exceeded for '{s}'", .{filename}),
+            else => log.err("failed to write PNG file '{s}': {}", .{ filename, err }),
+        }
+    }
+
+    /// Get file size in bytes, returns 0 if file cannot be accessed.
+    fn getFileSize(filename: []const u8) u64 {
+        const stat = std.fs.cwd().statFile(filename) catch return 0;
+        return stat.size;
     }
 
     /// Clean up renderer resources.
