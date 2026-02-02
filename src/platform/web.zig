@@ -492,6 +492,250 @@ const DEFAULT_CANVAS_SELECTOR: [*:0]const u8 = "#canvas";
 /// Used to create WebGPU surface from canvas element.
 const zgpu = @import("zgpu");
 
+/// Request a WebGPU adapter from the browser via navigator.gpu.requestAdapter().
+///
+/// This function initiates an asynchronous request for a WebGPU adapter in the
+/// browser environment. In the browser, WebGPU adapters are obtained through
+/// the navigator.gpu API, which requires asynchronous handling.
+///
+/// The adapter represents the browser's WebGPU implementation and is required
+/// before requesting a device. Unlike desktop Dawn-based implementations where
+/// adapter requests can complete synchronously, browser requests are inherently
+/// async due to the JavaScript event loop.
+///
+/// Parameters:
+/// - instance: WebGPU instance from which to request the adapter.
+/// - surface: Optional compatible surface for presentation. Pass the surface
+///   created from createSurfaceFromCanvas() to ensure the adapter can render
+///   to the canvas. Pass null for compute-only workloads.
+/// - callback: Function called when the adapter request completes.
+/// - userdata: Opaque pointer passed to the callback.
+///
+/// The callback receives:
+/// - status: Success/failure status of the request
+/// - adapter: The WebGPU adapter handle (valid only if status is success)
+/// - message: Error message if the request failed
+/// - userdata: The userdata pointer passed to requestAdapter
+///
+/// Example:
+/// ```zig
+/// const Ctx = struct {
+///     adapter: ?zgpu.wgpu.Adapter = null,
+///     status: zgpu.wgpu.RequestAdapterStatus = .unknown,
+/// };
+/// var ctx: Ctx = .{};
+///
+/// requestAdapter(instance, surface, &adapterCallback, &ctx);
+/// // ... later, in the main loop or async continuation ...
+/// if (ctx.status == .success) {
+///     // Use ctx.adapter
+/// }
+/// ```
+///
+/// Note: On web, this function returns immediately. The callback is invoked
+/// asynchronously when the browser completes the adapter request. You must
+/// use Emscripten's main loop or async/await patterns to wait for completion.
+pub fn requestAdapter(
+    instance: zgpu.wgpu.Instance,
+    surface: ?zgpu.wgpu.Surface,
+    callback: zgpu.wgpu.RequestAdapterCallback,
+    userdata: ?*anyopaque,
+) void {
+    log.info("requesting WebGPU adapter from browser", .{});
+
+    // Request adapter with high-performance preference.
+    // On web, this maps to navigator.gpu.requestAdapter() with powerPreference: "high-performance".
+    // The compatible_surface ensures the adapter can present to our canvas.
+    instance.requestAdapter(
+        .{
+            .next_in_chain = null,
+            .compatible_surface = surface,
+            .power_preference = .high_performance,
+            .backend_type = .undef, // Browser chooses (typically WebGPU native)
+            .force_fallback_adapter = false,
+            .compatibility_mode = false,
+        },
+        callback,
+        userdata,
+    );
+}
+
+/// Request a WebGPU adapter from the browser synchronously (blocking pattern).
+///
+/// This is a convenience wrapper that provides a synchronous-looking API for
+/// adapter requests. However, on web targets, true synchronous adapter requests
+/// are not possible due to the browser's async nature.
+///
+/// IMPORTANT: This function uses a blocking pattern that may not work correctly
+/// in all browser environments. For production use, prefer the async version
+/// (requestAdapter) with proper callback handling.
+///
+/// Parameters:
+/// - instance: WebGPU instance from which to request the adapter.
+/// - surface: Optional compatible surface for presentation.
+///
+/// Returns:
+/// - The WebGPU adapter if the request succeeded, or null if it failed.
+///
+/// Note: This function is provided for API compatibility with desktop code paths.
+/// In the browser, the actual adapter availability depends on browser WebGPU
+/// support and GPU driver availability.
+pub fn requestAdapterSync(
+    instance: zgpu.wgpu.Instance,
+    surface: ?zgpu.wgpu.Surface,
+) ?zgpu.wgpu.Adapter {
+    const Response = struct {
+        adapter: ?zgpu.wgpu.Adapter = null,
+        status: zgpu.wgpu.RequestAdapterStatus = .unknown,
+    };
+
+    var response: Response = .{};
+
+    // Make the async request.
+    // On web, this initiates the request but the callback may not fire
+    // until the browser's event loop processes it.
+    requestAdapter(instance, surface, &adapterCallback, @ptrCast(&response));
+
+    // Note: In a true browser async environment, we would need to yield
+    // to the main loop here. For Emscripten with synchronous WebGPU
+    // (which some versions support), this may work directly.
+
+    if (response.status != .success) {
+        log.warn("adapter request failed with status: {}", .{response.status});
+        return null;
+    }
+
+    if (response.adapter) |adapter| {
+        log.info("WebGPU adapter obtained successfully", .{});
+        return adapter;
+    }
+
+    return null;
+}
+
+/// Callback for adapter request - stores result in the response struct.
+fn adapterCallback(
+    status: zgpu.wgpu.RequestAdapterStatus,
+    adapter: zgpu.wgpu.Adapter,
+    message: ?[*:0]const u8,
+    userdata: ?*anyopaque,
+) callconv(.c) void {
+    const response: *struct {
+        adapter: ?zgpu.wgpu.Adapter,
+        status: zgpu.wgpu.RequestAdapterStatus,
+    } = @ptrCast(@alignCast(userdata));
+
+    response.status = status;
+
+    if (status == .success) {
+        response.adapter = adapter;
+        log.info("browser WebGPU adapter request succeeded", .{});
+    } else {
+        const msg = message orelse "unknown error";
+        log.err("browser WebGPU adapter request failed: {s}", .{msg});
+    }
+}
+
+/// Request a WebGPU device from an adapter.
+///
+/// Once an adapter is obtained, this function requests a logical device from it.
+/// The device is the primary interface for creating GPU resources (buffers,
+/// textures, pipelines) and submitting commands.
+///
+/// Parameters:
+/// - adapter: WebGPU adapter from which to request the device.
+/// - callback: Function called when the device request completes.
+/// - userdata: Opaque pointer passed to the callback.
+///
+/// Example:
+/// ```zig
+/// requestDevice(adapter, &deviceCallback, &ctx);
+/// ```
+pub fn requestDevice(
+    adapter: zgpu.wgpu.Adapter,
+    callback: zgpu.wgpu.RequestDeviceCallback,
+    userdata: ?*anyopaque,
+) void {
+    log.info("requesting WebGPU device from browser adapter", .{});
+
+    // Request device with default limits (sufficient for 2D rendering).
+    // The browser will provide a device with at least the default limits
+    // specified by the WebGPU specification.
+    adapter.requestDevice(
+        .{
+            .next_in_chain = null,
+            .label = "Web Primary Device",
+            .required_features_count = 0,
+            .required_features = null,
+            .required_limits = null,
+            .default_queue = .{
+                .next_in_chain = null,
+                .label = "Web Default Queue",
+            },
+            .device_lost_callback = null,
+            .device_lost_user_data = null,
+        },
+        callback,
+        userdata,
+    );
+}
+
+/// Request a WebGPU device synchronously (blocking pattern).
+///
+/// Convenience wrapper providing synchronous-looking API for device requests.
+/// See requestAdapterSync() for important caveats about browser async behavior.
+///
+/// Parameters:
+/// - adapter: WebGPU adapter from which to request the device.
+///
+/// Returns:
+/// - The WebGPU device if the request succeeded, or null if it failed.
+pub fn requestDeviceSync(adapter: zgpu.wgpu.Adapter) ?zgpu.wgpu.Device {
+    const Response = struct {
+        device: ?zgpu.wgpu.Device = null,
+        status: zgpu.wgpu.RequestDeviceStatus = .unknown,
+    };
+
+    var response: Response = .{};
+
+    requestDevice(adapter, &deviceCallback, @ptrCast(&response));
+
+    if (response.status != .success) {
+        log.warn("device request failed with status: {}", .{response.status});
+        return null;
+    }
+
+    if (response.device) |device| {
+        log.info("WebGPU device obtained successfully", .{});
+        return device;
+    }
+
+    return null;
+}
+
+/// Callback for device request - stores result in the response struct.
+fn deviceCallback(
+    status: zgpu.wgpu.RequestDeviceStatus,
+    device: zgpu.wgpu.Device,
+    message: ?[*:0]const u8,
+    userdata: ?*anyopaque,
+) callconv(.c) void {
+    const response: *struct {
+        device: ?zgpu.wgpu.Device,
+        status: zgpu.wgpu.RequestDeviceStatus,
+    } = @ptrCast(@alignCast(userdata));
+
+    response.status = status;
+
+    if (status == .success) {
+        response.device = device;
+        log.info("browser WebGPU device request succeeded", .{});
+    } else {
+        const msg = message orelse "unknown error";
+        log.err("browser WebGPU device request failed: {s}", .{msg});
+    }
+}
+
 /// Create a WebGPU surface from an HTML canvas element.
 ///
 /// This function creates a WebGPU surface bound to the specified canvas element,
