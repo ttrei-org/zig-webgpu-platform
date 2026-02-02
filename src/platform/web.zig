@@ -484,6 +484,10 @@ const emscripten = struct {
     }
 };
 
+/// Default canvas CSS selector used for Emscripten canvas operations.
+/// This matches the default canvas element created by Emscripten's shell HTML.
+const DEFAULT_CANVAS_SELECTOR: [*:0]const u8 = "#canvas";
+
 /// Web platform for browser-based execution via Emscripten.
 /// Implements the Platform interface using browser APIs for input handling
 /// and canvas-based rendering.
@@ -497,10 +501,15 @@ pub const WebPlatform = struct {
     const Self = @This();
 
     allocator: std.mem.Allocator,
-    /// Canvas/viewport width in pixels.
+    /// Canvas/viewport width in CSS pixels.
     width: u32,
-    /// Canvas/viewport height in pixels.
+    /// Canvas/viewport height in CSS pixels.
     height: u32,
+    /// Device pixel ratio for high-DPI displays.
+    /// Used to scale canvas backing store for crisp rendering.
+    pixel_ratio: f64,
+    /// CSS selector for the canvas element (stored for event registration).
+    canvas_selector: [*:0]const u8,
     /// Current mouse state, updated by browser event callbacks.
     mouse_state: MouseState,
     /// Whether a quit has been requested (e.g., page unload).
@@ -508,16 +517,54 @@ pub const WebPlatform = struct {
     /// Frame counter for timing and debugging.
     frame_count: u64,
 
-    /// Initialize the web platform.
-    /// Sets up initial state; actual browser bindings are established
-    /// when JavaScript calls into the WASM module.
-    pub fn init(allocator: std.mem.Allocator, width: u32, height: u32) Self {
-        log.info("initializing web platform for {}x{} canvas", .{ width, height });
+    /// Initialize the web platform by querying the canvas element.
+    ///
+    /// This function:
+    /// 1. Gets the canvas element dimensions from the browser via Emscripten
+    /// 2. Queries the device pixel ratio for high-DPI support
+    /// 3. Initializes input state with mouse centered in canvas
+    ///
+    /// The canvas selector defaults to "#canvas" (Emscripten's default).
+    /// For custom canvas elements, use initWithSelector().
+    pub fn init(allocator: std.mem.Allocator) Self {
+        return initWithSelector(allocator, DEFAULT_CANVAS_SELECTOR);
+    }
+
+    /// Initialize the web platform with a custom canvas selector.
+    ///
+    /// Use this when your HTML page has a custom canvas element ID.
+    /// For example: initWithSelector(allocator, "#my-game-canvas")
+    pub fn initWithSelector(allocator: std.mem.Allocator, canvas_selector: [*:0]const u8) Self {
+        log.info("initializing web platform with canvas selector", .{});
+
+        // Query canvas element dimensions from the browser
+        var canvas_width: c_int = 0;
+        var canvas_height: c_int = 0;
+        const size_result = emscripten.emscripten_get_canvas_element_size(
+            canvas_selector,
+            &canvas_width,
+            &canvas_height,
+        );
+
+        if (size_result != emscripten.EMSCRIPTEN_RESULT_SUCCESS) {
+            log.warn("failed to get canvas size (result={}), using defaults 800x600", .{size_result});
+            canvas_width = 800;
+            canvas_height = 600;
+        }
+
+        const width: u32 = @intCast(@max(1, canvas_width));
+        const height: u32 = @intCast(@max(1, canvas_height));
+
+        // Query device pixel ratio for high-DPI displays
+        const pixel_ratio = emscripten.emscripten_get_device_pixel_ratio();
+        log.info("canvas dimensions: {}x{}, pixel ratio: {d:.2}", .{ width, height, pixel_ratio });
 
         return Self{
             .allocator = allocator,
             .width = width,
             .height = height,
+            .pixel_ratio = pixel_ratio,
+            .canvas_selector = canvas_selector,
             .mouse_state = .{
                 .x = @as(f32, @floatFromInt(width)) / 2.0,
                 .y = @as(f32, @floatFromInt(height)) / 2.0,
@@ -563,11 +610,13 @@ pub const WebPlatform = struct {
         return .{ .width = self.width, .height = self.height };
     }
 
-    /// Get the framebuffer size.
-    /// For web, this is the same as canvas size (no high-DPI scaling handled here;
-    /// that's managed by CSS devicePixelRatio in JavaScript).
+    /// Get the framebuffer size in physical pixels.
+    /// On high-DPI displays, this is larger than the CSS pixel canvas size,
+    /// scaled by the device pixel ratio for crisp rendering.
     pub fn getFramebufferSize(self: *const Self) Size {
-        return .{ .width = self.width, .height = self.height };
+        const scaled_width: u32 = @intFromFloat(@as(f64, @floatFromInt(self.width)) * self.pixel_ratio);
+        const scaled_height: u32 = @intFromFloat(@as(f64, @floatFromInt(self.height)) * self.pixel_ratio);
+        return .{ .width = scaled_width, .height = scaled_height };
     }
 
     /// Check if a key is currently pressed.
@@ -603,7 +652,42 @@ pub const WebPlatform = struct {
     pub fn updateCanvasSize(self: *Self, width: u32, height: u32) void {
         self.width = width;
         self.height = height;
-        log.debug("canvas resized to {}x{}", .{ width, height });
+        // Re-query pixel ratio in case display changed (e.g., moved to different monitor)
+        self.pixel_ratio = emscripten.emscripten_get_device_pixel_ratio();
+        log.debug("canvas resized to {}x{}, pixel ratio: {d:.2}", .{ width, height, self.pixel_ratio });
+    }
+
+    /// Refresh canvas dimensions by re-querying from the browser.
+    /// Call this after CSS layout changes or window resizes that may not
+    /// trigger JavaScript resize events.
+    pub fn refreshCanvasSize(self: *Self) void {
+        var canvas_width: c_int = 0;
+        var canvas_height: c_int = 0;
+        const result = emscripten.emscripten_get_canvas_element_size(
+            self.canvas_selector,
+            &canvas_width,
+            &canvas_height,
+        );
+
+        if (result == emscripten.EMSCRIPTEN_RESULT_SUCCESS) {
+            self.width = @intCast(@max(1, canvas_width));
+            self.height = @intCast(@max(1, canvas_height));
+            self.pixel_ratio = emscripten.emscripten_get_device_pixel_ratio();
+            log.debug("canvas refreshed: {}x{}, pixel ratio: {d:.2}", .{ self.width, self.height, self.pixel_ratio });
+        } else {
+            log.warn("failed to refresh canvas size (result={})", .{result});
+        }
+    }
+
+    /// Get the canvas CSS selector for event registration.
+    /// Returns the selector used to target this canvas in Emscripten APIs.
+    pub fn getCanvasSelector(self: *const Self) [*:0]const u8 {
+        return self.canvas_selector;
+    }
+
+    /// Get the device pixel ratio for high-DPI scaling.
+    pub fn getPixelRatio(self: *const Self) f64 {
+        return self.pixel_ratio;
     }
 
     // Platform interface implementation functions.
