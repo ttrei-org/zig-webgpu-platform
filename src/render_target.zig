@@ -586,6 +586,62 @@ pub const OffscreenRenderTarget = struct {
         return true;
     }
 
+    /// Read pixel data from the mapped staging buffer.
+    /// Returns a slice of the mapped buffer containing RGBA pixel data.
+    ///
+    /// This must be called after:
+    /// 1. copyToStagingBuffer() has queued the texture copy
+    /// 2. The command buffer has been submitted
+    /// 3. mapStagingBuffer() has initiated the async mapping
+    /// 4. waitForMap() has confirmed the mapping completed successfully
+    ///
+    /// The returned slice is valid until unmapStagingBuffer() is called.
+    /// Data is in RGBA format with 256-byte aligned rows.
+    /// Use getAlignedBytesPerRow() to calculate row offsets.
+    ///
+    /// Returns null if the buffer is not currently mapped or mapping failed.
+    ///
+    /// Usage:
+    /// ```
+    /// var map_ctx: MapCallbackContext = .{};
+    /// offscreen_target.mapStagingBuffer(&map_ctx);
+    /// if (offscreen_target.waitForMap(&map_ctx)) {
+    ///     if (offscreen_target.getMappedPixelData()) |pixel_data| {
+    ///         // Process pixel_data as []const u8 in RGBA format
+    ///         // Row stride is getAlignedBytesPerRow(), not width * 4
+    ///         offscreen_target.unmapStagingBuffer();
+    ///     }
+    /// }
+    /// ```
+    pub fn getMappedPixelData(self: *const Self) ?[]const u8 {
+        const buffer_size = self.getStagingBufferSize();
+
+        const mapped_data = self.staging_buffer.getConstMappedRange(u8, 0, buffer_size);
+        if (mapped_data == null) {
+            log.err("failed to get mapped range from staging buffer", .{});
+            return null;
+        }
+
+        log.debug("retrieved {} bytes of mapped pixel data ({}x{}, {} bytes/row)", .{
+            buffer_size,
+            self.width,
+            self.height,
+            self.getAlignedBytesPerRow(),
+        });
+        return mapped_data;
+    }
+
+    /// Unmap the staging buffer after reading pixel data.
+    /// This releases the CPU mapping and allows the buffer to be used
+    /// for GPU operations again.
+    ///
+    /// Must be called after getMappedPixelData() when done processing.
+    /// The pixel data slice returned by getMappedPixelData() becomes invalid.
+    pub fn unmapStagingBuffer(self: *const Self) void {
+        self.staging_buffer.unmap();
+        log.debug("staging buffer unmapped", .{});
+    }
+
     // Implementation functions for the RenderTarget interface.
 
     fn getTextureViewImpl(render_target: *RenderTarget) RenderTargetError!zgpu.wgpu.TextureView {
