@@ -7,6 +7,7 @@
 //!
 //! Command-line options:
 //! - --screenshot=<filename>: Take a screenshot after startup and exit
+//! - --headless: Run in headless mode for automated testing and screenshot generation
 
 const std = @import("std");
 const zgpu = @import("zgpu");
@@ -39,6 +40,9 @@ pub const GraphicsContext = zgpu.GraphicsContext;
 const Options = struct {
     /// If set, take a screenshot to this filename and exit.
     screenshot_filename: ?[]const u8 = null,
+    /// If true, run in headless mode (no window display).
+    /// Used for automated testing and screenshot generation.
+    headless: bool = false,
 };
 
 /// Parse command-line arguments.
@@ -57,6 +61,8 @@ fn parseArgs(allocator: std.mem.Allocator) Options {
     while (args.next()) |arg| {
         if (std.mem.startsWith(u8, arg, "--screenshot=")) {
             opts.screenshot_filename = arg["--screenshot=".len..];
+        } else if (std.mem.eql(u8, arg, "--headless")) {
+            opts.headless = true;
         }
     }
 
