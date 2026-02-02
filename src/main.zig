@@ -10,18 +10,26 @@
 //! - --headless: Run in headless mode for automated testing and screenshot generation
 
 const std = @import("std");
+const builtin = @import("builtin");
 const zgpu = @import("zgpu");
-const zglfw = @import("zglfw");
 
 const App = @import("app.zig").App;
 const platform_mod = @import("platform.zig");
 const Platform = platform_mod.Platform;
 
+/// True if building for native desktop (not emscripten/web)
+const is_native = platform_mod.is_native;
+
+/// zglfw is only available on native desktop builds
+const zglfw = if (is_native) @import("zglfw") else struct {};
+
 /// Frames per second cap for delta time calculation.
 /// If a frame takes longer than this, delta_time is capped to prevent
 /// large jumps in game state (e.g., when window is dragged or minimized).
 const MAX_DELTA_TIME: f32 = 0.25; // 4 FPS minimum
-const desktop = @import("platform/desktop.zig");
+
+/// Desktop platform is only available for native builds
+const desktop = if (is_native) @import("platform/desktop.zig") else struct {};
 const headless = @import("platform/headless.zig");
 const renderer_mod = @import("renderer.zig");
 const Renderer = renderer_mod.Renderer;
@@ -100,15 +108,24 @@ pub fn main() void {
 
     if (config.headless) {
         runHeadless(config);
-    } else {
+    } else if (is_native) {
+        // Windowed mode is only available on native desktop builds
         runWindowed(config);
+    } else {
+        // On emscripten, run in headless/offscreen mode for now
+        // (Full web support will be added in a future issue)
+        log.info("emscripten target: running in headless mode", .{});
+        runHeadless(config);
     }
 
     log.info("zig-gui-experiment exiting", .{});
 }
 
 /// Run in windowed mode with GLFW and swap chain rendering.
-fn runWindowed(config: Config) void {
+/// Only available on native desktop builds (not emscripten).
+const runWindowed = if (is_native) runWindowedImpl else unreachable;
+
+fn runWindowedImpl(config: Config) void {
     log.info("starting windowed mode", .{});
 
     // Initialize desktop platform with GLFW

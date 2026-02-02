@@ -3,9 +3,11 @@
 //! Provides window creation and input handling for Linux and Windows
 //! desktop environments via the zglfw bindings. Implements the Platform
 //! interface defined in platform.zig.
+//!
+//! This module is only compiled for native desktop builds (not emscripten).
 
 const std = @import("std");
-const zglfw = @import("zglfw");
+const builtin = @import("builtin");
 
 const main = @import("../main.zig");
 const Config = main.Config;
@@ -15,6 +17,10 @@ const Platform = platform_mod.Platform;
 const MouseState = platform_mod.MouseState;
 const Key = platform_mod.Key;
 const Size = platform_mod.Size;
+
+/// zglfw is only available on native desktop builds.
+/// This module should not be compiled for emscripten targets.
+const zglfw = if (platform_mod.is_native) @import("zglfw") else @compileError("desktop.zig requires zglfw which is not available on emscripten");
 
 const log = std.log.scoped(.desktop_platform);
 

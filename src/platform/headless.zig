@@ -5,7 +5,7 @@
 //! Used with OffscreenRenderTarget for GPU rendering without visual output.
 
 const std = @import("std");
-const zglfw = @import("zglfw");
+const builtin = @import("builtin");
 
 const main = @import("../main.zig");
 const Config = main.Config;
@@ -15,6 +15,11 @@ const Platform = platform_mod.Platform;
 const MouseState = platform_mod.MouseState;
 const Key = platform_mod.Key;
 const Size = platform_mod.Size;
+
+/// zglfw is only available on native desktop builds
+const zglfw = if (platform_mod.is_native) @import("zglfw") else struct {
+    pub const Window = opaque {};
+};
 
 const log = std.log.scoped(.headless_platform);
 

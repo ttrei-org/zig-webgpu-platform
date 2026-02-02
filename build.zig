@@ -4,15 +4,22 @@ pub fn build(b: *std.Build) void {
     const target = b.standardTargetOptions(.{});
     const optimize = b.standardOptimizeOption(.{});
 
+    // Detect if building for emscripten/web target
+    const target_os = target.result.os.tag;
+    const is_emscripten = target_os == .emscripten;
+    const is_native = !is_emscripten;
+
+    // Configure output path: zig-out/web/ for emscripten, default for native
+    if (is_emscripten) {
+        b.install_prefix = "zig-out/web";
+    }
+
     // Fetch zgpu dependency and get its module
     const zgpu_dep = b.dependency("zgpu", .{
         .target = target,
         .optimize = optimize,
     });
     const zgpu_module = zgpu_dep.module("root");
-
-    // Detect if building for native desktop (not emscripten/web)
-    const is_native = target.result.os.tag != .emscripten;
 
     // Create the root module for the executable
     const root_module = b.createModule(.{
@@ -42,44 +49,57 @@ pub fn build(b: *std.Build) void {
     }
 
     const exe = b.addExecutable(.{
-        .name = "zig_gui_experiment",
+        .name = if (is_emscripten) "zig_gui_experiment.wasm" else "zig_gui_experiment",
         .root_module = root_module,
     });
 
-    // Link Dawn/WebGPU and system dependencies
-    const zgpu_build = @import("zgpu");
-    zgpu_build.addLibraryPathsTo(exe);
-    zgpu_build.linkSystemDeps(b, exe);
+    // Native-only: Link Dawn/WebGPU and system dependencies
+    // Emscripten uses browser's WebGPU implementation
+    if (is_native) {
+        const zgpu_build = @import("zgpu");
+        zgpu_build.addLibraryPathsTo(exe);
+        zgpu_build.linkSystemDeps(b, exe);
 
-    // Add include path for Dawn headers
-    exe.root_module.addIncludePath(zgpu_dep.path("libs/dawn/include"));
-    exe.root_module.addIncludePath(zgpu_dep.path("src"));
+        // Add include path for Dawn headers
+        exe.root_module.addIncludePath(zgpu_dep.path("libs/dawn/include"));
+        exe.root_module.addIncludePath(zgpu_dep.path("src"));
 
-    // Link Dawn and C++ runtime
-    exe.linkSystemLibrary("dawn");
-    exe.linkLibC();
-    exe.linkLibCpp();
+        // Link Dawn and C++ runtime
+        exe.linkSystemLibrary("dawn");
+        exe.linkLibC();
+        exe.linkLibCpp();
 
-    // Link X11 on Linux for Dawn's surface support
-    const target_os = target.result.os.tag;
-    if (target_os == .linux) {
-        exe.linkSystemLibrary("X11");
+        // Link X11 on Linux for Dawn's surface support
+        if (target_os == .linux) {
+            exe.linkSystemLibrary("X11");
+        }
+
+        // Link GLFW library for desktop builds
+        if (zglfw_dep) |dep| {
+            exe.root_module.linkLibrary(dep.artifact("glfw"));
+        }
+
+        // Add C source files for Dawn bindings
+        exe.root_module.addCSourceFile(.{
+            .file = zgpu_dep.path("src/dawn.cpp"),
+            .flags = &.{ "-std=c++17", "-fno-sanitize=undefined" },
+        });
+        exe.root_module.addCSourceFile(.{
+            .file = zgpu_dep.path("src/dawn_proc.c"),
+            .flags = &.{"-fno-sanitize=undefined"},
+        });
+    } else {
+        // Emscripten-specific configuration
+        // Export WebGPU entry points and set up for browser environment
+
+        // Set emscripten-specific linker flags
+        if (exe.root_module.resolved_target) |resolved| {
+            if (resolved.result.os.tag == .emscripten) {
+                // Emscripten builds don't need Dawn - they use browser WebGPU
+                // Additional emscripten flags can be added here as needed
+            }
+        }
     }
-
-    // Link GLFW library for desktop builds
-    if (zglfw_dep) |dep| {
-        exe.root_module.linkLibrary(dep.artifact("glfw"));
-    }
-
-    // Add C source files for Dawn bindings
-    exe.root_module.addCSourceFile(.{
-        .file = zgpu_dep.path("src/dawn.cpp"),
-        .flags = &.{ "-std=c++17", "-fno-sanitize=undefined" },
-    });
-    exe.root_module.addCSourceFile(.{
-        .file = zgpu_dep.path("src/dawn_proc.c"),
-        .flags = &.{"-fno-sanitize=undefined"},
-    });
 
     b.installArtifact(exe);
 

@@ -6,7 +6,15 @@
 //! without dynamic dispatch overhead when inlined.
 
 const std = @import("std");
-const zglfw = @import("zglfw");
+const builtin = @import("builtin");
+
+/// True if building for native desktop (not emscripten/web)
+pub const is_native = builtin.os.tag != .emscripten;
+
+/// zglfw is only available on native desktop builds
+const zglfw = if (is_native) @import("zglfw") else struct {
+    pub const Window = opaque {};
+};
 
 const log = std.log.scoped(.platform);
 
