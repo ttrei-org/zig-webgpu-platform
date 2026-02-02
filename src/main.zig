@@ -264,6 +264,11 @@ fn runHeadless(config: Config) void {
         app.render(&renderer);
         renderer.flushBatch(render_pass);
         Renderer.endRenderPass(render_pass);
+
+        // Copy rendered texture to staging buffer for CPU readback.
+        // This must be done after rendering but before the command buffer is submitted.
+        offscreen_target.copyToStagingBuffer(frame_state.command_encoder);
+
         renderer.endFrame(frame_state, render_target);
 
         frame_count += 1;

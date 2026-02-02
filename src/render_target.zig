@@ -451,6 +451,44 @@ pub const OffscreenRenderTarget = struct {
         return @as(u64, aligned_bytes_per_row) * @as(u64, self.height);
     }
 
+    /// Copy the offscreen texture to the staging buffer for CPU readback.
+    /// This should be called after rendering is complete, using the same command
+    /// encoder that was used for rendering. The copy will be executed when the
+    /// command buffer is submitted.
+    ///
+    /// After submission and device tick, the staging buffer can be mapped and read.
+    ///
+    /// Parameters:
+    /// - encoder: The command encoder to record the copy operation to.
+    ///   This should be the same encoder used for rendering the frame.
+    pub fn copyToStagingBuffer(self: *const Self, encoder: zgpu.wgpu.CommandEncoder) void {
+        const aligned_bytes_per_row = calcAlignedBytesPerRow(self.width);
+
+        encoder.copyTextureToBuffer(
+            .{
+                .texture = self.texture,
+                .mip_level = 0,
+                .origin = .{ .x = 0, .y = 0, .z = 0 },
+                .aspect = .all,
+            },
+            .{
+                .buffer = self.staging_buffer,
+                .layout = .{
+                    .offset = 0,
+                    .bytes_per_row = aligned_bytes_per_row,
+                    .rows_per_image = self.height,
+                },
+            },
+            .{
+                .width = self.width,
+                .height = self.height,
+                .depth_or_array_layers = 1,
+            },
+        );
+
+        log.debug("queued copy of offscreen texture ({}x{}) to staging buffer", .{ self.width, self.height });
+    }
+
     // Implementation functions for the RenderTarget interface.
 
     fn getTextureViewImpl(render_target: *RenderTarget) RenderTargetError!zgpu.wgpu.TextureView {
