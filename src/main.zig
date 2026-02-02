@@ -138,16 +138,22 @@ fn runWindowed(config: Config) void {
     var swap_chain_target = renderer.createSwapChainRenderTarget();
     var render_target = swap_chain_target.asRenderTarget();
 
-    // Initialize application state
-    var app = App.init(std.heap.page_allocator);
+    // Initialize application state with screenshot config
+    const app_options: App.Options = .{
+        .screenshot_path = config.screenshot_filename,
+        .quit_after_screenshot = true,
+    };
+    var app = App.initWithOptions(std.heap.page_allocator, app_options);
     defer app.deinit();
+
+    // Set renderer reference for screenshot capability
+    app.setRenderer(&renderer);
 
     // Get the platform abstraction interface
     var plat = platform.platform();
 
     log.info("entering main loop", .{});
 
-    var first_frame_rendered = false;
     var last_time: f64 = zglfw.getTime();
 
     // Main loop
@@ -198,15 +204,12 @@ fn runWindowed(config: Config) void {
         Renderer.endRenderPass(render_pass);
         renderer.endFrame(frame_state, render_target);
 
-        if (!first_frame_rendered) {
-            first_frame_rendered = true;
-            if (config.screenshot_filename) |filename| {
-                renderer.screenshot(filename) catch |err| {
-                    log.err("failed to take startup screenshot: {}", .{err});
-                };
-                log.info("screenshot mode: exiting after capturing {s}", .{filename});
-                break;
-            }
+        // Check if App wants to take a screenshot after this frame
+        if (app.shouldTakeScreenshot()) |filename| {
+            renderer.screenshot(filename) catch |err| {
+                log.err("failed to take screenshot: {}", .{err});
+            };
+            app.onScreenshotComplete();
         }
     }
 }
@@ -234,9 +237,16 @@ fn runHeadless(config: Config) void {
     defer offscreen_target.deinit();
     const render_target = offscreen_target.asRenderTarget();
 
-    // Initialize application state
-    var app = App.init(std.heap.page_allocator);
+    // Initialize application state with screenshot config
+    const app_options: App.Options = .{
+        .screenshot_path = config.screenshot_filename,
+        .quit_after_screenshot = true,
+    };
+    var app = App.initWithOptions(std.heap.page_allocator, app_options);
     defer app.deinit();
+
+    // Set renderer reference for screenshot capability
+    app.setRenderer(&renderer);
 
     // Get the platform abstraction interface
     var plat = platform.platform();
@@ -274,14 +284,13 @@ fn runHeadless(config: Config) void {
         frame_count += 1;
         log.info("headless frame {} rendered successfully", .{frame_count});
 
-        // Handle screenshot option - take screenshot and exit
-        if (config.screenshot_filename) |filename| {
+        // Check if App wants to take a screenshot after this frame
+        if (app.shouldTakeScreenshot()) |filename| {
             log.info("taking headless screenshot to {s}", .{filename});
             renderer.takeScreenshotFromOffscreen(&offscreen_target, filename) catch |err| {
                 log.err("failed to take headless screenshot: {}", .{err});
             };
-            log.info("headless screenshot complete, exiting", .{});
-            break;
+            app.onScreenshotComplete();
         }
     }
 

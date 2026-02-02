@@ -61,11 +61,41 @@ pub const App = struct {
     /// Optional because App may be created before Renderer in some initialization orders.
     renderer: ?*Renderer,
 
+    /// Path for screenshot output. If set, a screenshot will be taken after the first frame.
+    /// Set via setScreenshotPath() or during initialization.
+    screenshot_path: ?[]const u8,
+
+    /// Whether a screenshot is pending (should be taken after next render).
+    /// Set to true when screenshot_path is configured, cleared after screenshot is taken.
+    screenshot_pending: bool,
+
+    /// Whether the app should quit after taking a screenshot.
+    /// Used for automated testing workflows where we render, capture, and exit.
+    quit_after_screenshot: bool,
+
+    /// Application configuration options.
+    /// Passed to init() to configure app behavior.
+    pub const Options = struct {
+        /// Path for screenshot output. If set, a screenshot will be taken after the first frame.
+        screenshot_path: ?[]const u8 = null,
+        /// Whether to quit after taking a screenshot.
+        quit_after_screenshot: bool = true,
+    };
+
     /// Initialize the application with the given allocator.
     /// The allocator is stored for any dynamic allocations the app may need.
     /// Renderer reference is initially null; call setRenderer() to enable screenshot capability.
     pub fn init(allocator: std.mem.Allocator) Self {
+        return initWithOptions(allocator, .{});
+    }
+
+    /// Initialize the application with the given allocator and options.
+    /// Use this to configure screenshot behavior and other app settings.
+    pub fn initWithOptions(allocator: std.mem.Allocator, options: Options) Self {
         log.debug("initializing app", .{});
+        if (options.screenshot_path) |path| {
+            log.info("screenshot configured: {s} (quit_after={})", .{ path, options.quit_after_screenshot });
+        }
         const initial_mouse_state: MouseState = .{
             .x = 0,
             .y = 0,
@@ -82,6 +112,9 @@ pub const App = struct {
             .triangle_position = .{ 200.0, 150.0 }, // Center of 400x300 window
             .rotation_angle = 0.0,
             .renderer = null,
+            .screenshot_path = options.screenshot_path,
+            .screenshot_pending = options.screenshot_path != null,
+            .quit_after_screenshot = options.quit_after_screenshot,
         };
     }
 
@@ -91,6 +124,38 @@ pub const App = struct {
     pub fn setRenderer(self: *Self, renderer: *Renderer) void {
         self.renderer = renderer;
         log.debug("renderer reference set for screenshot capability", .{});
+    }
+
+    /// Schedule a screenshot to be taken after the next frame.
+    /// The screenshot will be saved to the specified path.
+    ///
+    /// Parameters:
+    /// - path: File path where the PNG screenshot will be saved
+    /// - quit_after: If true, the app will request quit after the screenshot is taken
+    pub fn scheduleScreenshot(self: *Self, path: []const u8, quit_after: bool) void {
+        self.screenshot_path = path;
+        self.screenshot_pending = true;
+        self.quit_after_screenshot = quit_after;
+        log.info("screenshot scheduled: {s} (quit_after={})", .{ path, quit_after });
+    }
+
+    /// Check if a screenshot should be taken after the current frame.
+    /// Returns the screenshot path if pending, null otherwise.
+    pub fn shouldTakeScreenshot(self: *const Self) ?[]const u8 {
+        if (self.screenshot_pending) {
+            return self.screenshot_path;
+        }
+        return null;
+    }
+
+    /// Called after a screenshot has been successfully taken.
+    /// Clears the pending flag and optionally requests quit.
+    pub fn onScreenshotComplete(self: *Self) void {
+        self.screenshot_pending = false;
+        if (self.quit_after_screenshot) {
+            log.info("screenshot complete, requesting quit", .{});
+            self.requestQuit();
+        }
     }
 
     /// Clean up application resources.
@@ -789,4 +854,68 @@ test "App init has null renderer by default" {
 
     // Verify renderer is null on init
     try std.testing.expectEqual(@as(?*Renderer, null), app.renderer);
+}
+
+test "App initWithOptions configures screenshot" {
+    const options: App.Options = .{
+        .screenshot_path = "/tmp/test.png",
+        .quit_after_screenshot = true,
+    };
+    var app = App.initWithOptions(std.testing.allocator, options);
+    defer app.deinit();
+
+    // Verify screenshot is pending with correct path
+    try std.testing.expect(app.screenshot_pending);
+    try std.testing.expectEqualStrings("/tmp/test.png", app.screenshot_path.?);
+    try std.testing.expect(app.quit_after_screenshot);
+}
+
+test "App shouldTakeScreenshot returns path when pending" {
+    const options: App.Options = .{
+        .screenshot_path = "/tmp/screenshot.png",
+        .quit_after_screenshot = false,
+    };
+    var app = App.initWithOptions(std.testing.allocator, options);
+    defer app.deinit();
+
+    // Should return the path when screenshot is pending
+    const path = app.shouldTakeScreenshot();
+    try std.testing.expect(path != null);
+    try std.testing.expectEqualStrings("/tmp/screenshot.png", path.?);
+}
+
+test "App onScreenshotComplete clears pending and optionally quits" {
+    const options: App.Options = .{
+        .screenshot_path = "/tmp/test.png",
+        .quit_after_screenshot = true,
+    };
+    var app = App.initWithOptions(std.testing.allocator, options);
+    defer app.deinit();
+
+    try std.testing.expect(app.isRunning());
+    try std.testing.expect(app.screenshot_pending);
+
+    // After screenshot complete, should no longer be pending
+    app.onScreenshotComplete();
+
+    try std.testing.expect(!app.screenshot_pending);
+    // Since quit_after_screenshot is true, app should no longer be running
+    try std.testing.expect(!app.isRunning());
+}
+
+test "App scheduleScreenshot sets up screenshot" {
+    var app = App.init(std.testing.allocator);
+    defer app.deinit();
+
+    // Initially no screenshot pending
+    try std.testing.expect(app.shouldTakeScreenshot() == null);
+
+    // Schedule a screenshot
+    app.scheduleScreenshot("/tmp/dynamic.png", false);
+
+    // Now it should be pending
+    const path = app.shouldTakeScreenshot();
+    try std.testing.expect(path != null);
+    try std.testing.expectEqualStrings("/tmp/dynamic.png", path.?);
+    try std.testing.expect(!app.quit_after_screenshot);
 }
