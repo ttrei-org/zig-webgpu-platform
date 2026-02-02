@@ -23,6 +23,7 @@
             height: 100vh;
         }
         .error-message {
+            display: none;
             position: fixed;
             top: 50%;
             left: 50%;
@@ -36,10 +37,17 @@
             border-radius: 8px;
             max-width: 80%;
         }
+        .error-message.visible {
+            display: block;
+        }
+        #canvas.hidden {
+            display: none;
+        }
     </style>
 </head>
 <body>
     <canvas id="canvas" width="800" height="600"></canvas>
+    <div id="error" class="error-message"></div>
 
     <!-- Load the Emscripten-generated JavaScript module -->
     <script type="module" src="./zig_gui_experiment.js"></script>
@@ -50,6 +58,12 @@
         import { init } from "./zig_gui_experiment.js";
 
         async function main() {
+            // Check for WebGPU support before anything else
+            if (!navigator.gpu) {
+                showError("WebGPU is not supported in your browser. Please use Chrome 113+, Edge, or Firefox Nightly.");
+                return;
+            }
+
             const canvas = document.getElementById("canvas");
             if (!canvas) {
                 showError("Canvas element not found");
@@ -103,10 +117,13 @@
         }
 
         function showError(message) {
-            const div = document.createElement("div");
-            div.className = "error-message";
-            div.textContent = message;
-            document.body.appendChild(div);
+            const errorDiv = document.getElementById("error");
+            const canvas = document.getElementById("canvas");
+            errorDiv.textContent = message;
+            errorDiv.classList.add("visible");
+            if (canvas) {
+                canvas.classList.add("hidden");
+            }
             console.error(message);
         }
 
