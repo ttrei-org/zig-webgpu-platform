@@ -116,6 +116,60 @@ pub fn build(b: *std.Build) void {
 
     b.installArtifact(exe);
 
+    // For web builds, also generate JavaScript glue code
+    if (is_emscripten) {
+        // Create JavaScript loader file that instantiates the WASM module
+        // This provides the minimal glue code needed to load and run the WASM
+        // in a browser with WebGPU support
+        const js_glue = b.addWriteFiles();
+        _ = js_glue.add("zig_gui_experiment.js",
+            \\// Generated JavaScript glue code for zig_gui_experiment.wasm
+            \\// This module provides WebGPU integration and WASM loading
+            \\
+            \\export async function init(wasmPath) {
+            \\    if (!navigator.gpu) {
+            \\        throw new Error("WebGPU is not supported in this browser");
+            \\    }
+            \\
+            \\    const adapter = await navigator.gpu.requestAdapter();
+            \\    if (!adapter) {
+            \\        throw new Error("Failed to get WebGPU adapter");
+            \\    }
+            \\
+            \\    const device = await adapter.requestDevice();
+            \\
+            \\    const response = await fetch(wasmPath || "zig_gui_experiment.wasm");
+            \\    const wasmBytes = await response.arrayBuffer();
+            \\
+            \\    const importObject = {
+            \\        env: {
+            \\            // WebGPU device will be passed to WASM via imports
+            \\            // Memory is exported from WASM, not imported
+            \\        },
+            \\    };
+            \\
+            \\    const { instance } = await WebAssembly.instantiate(wasmBytes, importObject);
+            \\
+            \\    return {
+            \\        instance,
+            \\        device,
+            \\        adapter,
+            \\        exports: instance.exports,
+            \\    };
+            \\}
+            \\
+            \\export default { init };
+            \\
+        );
+
+        // Install the JS glue file to the web output directory
+        b.getInstallStep().dependOn(&b.addInstallFileWithDir(
+            js_glue.getDirectory().path(b, "zig_gui_experiment.js"),
+            .{ .custom = "." },
+            "zig_gui_experiment.js",
+        ).step);
+    }
+
     const run_cmd = b.addRunArtifact(exe);
     run_cmd.step.dependOn(b.getInstallStep());
     if (b.args) |args| {
