@@ -116,7 +116,211 @@ pub const RenderTarget = struct {
     }
 };
 
+/// SwapChainRenderTarget wraps a WebGPU swap chain to implement the RenderTarget interface.
+///
+/// This enables the existing windowed rendering code to work with the RenderTarget abstraction
+/// without modification. The swap chain provides texture views for each frame and handles
+/// presentation to the window surface.
+///
+/// Lifecycle:
+/// 1. Create with init() passing the swap chain and initial dimensions
+/// 2. Each frame: getTextureView() → render → present()
+/// 3. On window resize: call resize() to recreate the swap chain
+pub const SwapChainRenderTarget = struct {
+    const Self = @This();
+
+    /// The underlying WebGPU swap chain.
+    swapchain: zgpu.wgpu.SwapChain,
+    /// WebGPU device needed for swap chain recreation on resize.
+    device: zgpu.wgpu.Device,
+    /// WebGPU surface needed for swap chain recreation on resize.
+    surface: zgpu.wgpu.Surface,
+    /// Current width in pixels.
+    width: u32,
+    /// Current height in pixels.
+    height: u32,
+    /// Current texture view from the swap chain (acquired each frame).
+    /// Stored here so we can release it on present().
+    current_texture_view: ?zgpu.wgpu.TextureView,
+    /// The RenderTarget interface that delegates to this implementation.
+    /// Initialized in init() with function pointers to our methods.
+    render_target: RenderTarget,
+
+    /// Initialize a SwapChainRenderTarget wrapping an existing swap chain.
+    ///
+    /// Parameters:
+    /// - swapchain: The WebGPU swap chain to wrap
+    /// - device: WebGPU device for swap chain recreation
+    /// - surface: WebGPU surface for swap chain recreation
+    /// - width: Initial width in pixels
+    /// - height: Initial height in pixels
+    pub fn init(
+        swapchain: zgpu.wgpu.SwapChain,
+        device: zgpu.wgpu.Device,
+        surface: zgpu.wgpu.Surface,
+        width: u32,
+        height: u32,
+    ) Self {
+        var self: Self = .{
+            .swapchain = swapchain,
+            .device = device,
+            .surface = surface,
+            .width = width,
+            .height = height,
+            .current_texture_view = null,
+            .render_target = undefined,
+        };
+
+        // Initialize the RenderTarget interface with our function pointers.
+        // The context pointer points to this SwapChainRenderTarget instance.
+        self.render_target = .{
+            .context = @ptrCast(&self),
+            .getTextureViewFn = &getTextureViewImpl,
+            .getDimensionsFn = &getDimensionsImpl,
+            .presentFn = &presentImpl,
+            .needsResizeFn = &needsResizeImpl,
+            .resizeFn = &resizeImpl,
+        };
+
+        return self;
+    }
+
+    /// Get the RenderTarget interface for this swap chain target.
+    /// Returns a pointer to the embedded RenderTarget that can be used polymorphically.
+    pub fn asRenderTarget(self: *Self) *RenderTarget {
+        // Update the context pointer to ensure it points to the current location.
+        // This is necessary because the struct may have been moved after init().
+        self.render_target.context = @ptrCast(self);
+        return &self.render_target;
+    }
+
+    // Implementation functions for the RenderTarget interface.
+    // These are called through the function pointer vtable.
+
+    fn getTextureViewImpl(render_target: *RenderTarget) RenderTargetError!zgpu.wgpu.TextureView {
+        const self: *Self = @ptrCast(@alignCast(render_target.context));
+
+        // Release any previous texture view before acquiring a new one.
+        // The swap chain owns the texture, but we need to release the view.
+        if (self.current_texture_view) |view| {
+            view.release();
+            self.current_texture_view = null;
+        }
+
+        // Get the current texture view from the swap chain.
+        // Dawn's getCurrentTextureView can return null (as address 0) if the
+        // swap chain is invalid (e.g., window minimized).
+        const texture_view = self.swapchain.getCurrentTextureView();
+        if (@intFromPtr(texture_view) == 0) {
+            log.warn("swap chain returned null texture view", .{});
+            return RenderTargetError.TextureViewAcquisitionFailed;
+        }
+
+        self.current_texture_view = texture_view;
+        return texture_view;
+    }
+
+    fn getDimensionsImpl(render_target: *const RenderTarget) Dimensions {
+        const self: *const Self = @ptrCast(@alignCast(render_target.context));
+        return .{
+            .width = self.width,
+            .height = self.height,
+        };
+    }
+
+    fn presentImpl(render_target: *RenderTarget) void {
+        const self: *Self = @ptrCast(@alignCast(render_target.context));
+
+        // Release the texture view before presenting.
+        // The view is only valid until present() is called.
+        if (self.current_texture_view) |view| {
+            view.release();
+            self.current_texture_view = null;
+        }
+
+        // Present the swap chain to display the rendered frame.
+        self.swapchain.present();
+    }
+
+    fn needsResizeImpl(render_target: *const RenderTarget, width: u32, height: u32) bool {
+        const self: *const Self = @ptrCast(@alignCast(render_target.context));
+        return self.width != width or self.height != height;
+    }
+
+    fn resizeImpl(render_target: *RenderTarget, width: u32, height: u32) RenderTargetError!void {
+        const self: *Self = @ptrCast(@alignCast(render_target.context));
+
+        // Don't resize to zero dimensions (window minimized).
+        if (width == 0 or height == 0) {
+            log.debug("ignoring resize to zero dimensions", .{});
+            return;
+        }
+
+        // Release any current texture view before recreating the swap chain.
+        if (self.current_texture_view) |view| {
+            view.release();
+            self.current_texture_view = null;
+        }
+
+        // Release the old swap chain.
+        self.swapchain.release();
+
+        // Create a new swap chain with the updated dimensions.
+        const new_swapchain = self.device.createSwapChain(
+            self.surface,
+            .{
+                .next_in_chain = null,
+                .label = "Main Swap Chain",
+                .usage = .{ .render_attachment = true },
+                .format = .bgra8_unorm,
+                .width = width,
+                .height = height,
+                .present_mode = .fifo, // VSync enabled
+            },
+        );
+
+        // Verify swap chain creation succeeded.
+        if (@intFromPtr(new_swapchain) == 0) {
+            log.err("failed to recreate swap chain", .{});
+            return RenderTargetError.ResizeFailed;
+        }
+
+        self.swapchain = new_swapchain;
+        self.width = width;
+        self.height = height;
+
+        log.info("swap chain resized to {}x{}", .{ width, height });
+    }
+
+    /// Release resources held by this target.
+    /// Note: Does NOT release the swap chain itself, as that's typically
+    /// owned by the Renderer. Only releases the current texture view if any.
+    pub fn deinit(self: *Self) void {
+        if (self.current_texture_view) |view| {
+            view.release();
+            self.current_texture_view = null;
+        }
+    }
+};
+
 test "Dimensions struct size and alignment" {
     // Dimensions should be 8 bytes (2 x u32)
     try std.testing.expectEqual(@as(usize, 8), @sizeOf(Dimensions));
+}
+
+test "SwapChainRenderTarget interface consistency" {
+    // Verify the RenderTarget function pointer types match SwapChainRenderTarget implementations.
+    // This is a compile-time check that the signatures are correct.
+    const rt_get_tex: @TypeOf(RenderTarget.getTextureViewFn) = &SwapChainRenderTarget.getTextureViewImpl;
+    const rt_get_dim: @TypeOf(RenderTarget.getDimensionsFn) = &SwapChainRenderTarget.getDimensionsImpl;
+    const rt_present: @TypeOf(RenderTarget.presentFn) = &SwapChainRenderTarget.presentImpl;
+    const rt_needs_resize: @TypeOf(RenderTarget.needsResizeFn) = &SwapChainRenderTarget.needsResizeImpl;
+    const rt_resize: @TypeOf(RenderTarget.resizeFn) = &SwapChainRenderTarget.resizeImpl;
+
+    // Suppress unused variable warnings - we just need the assignments to compile.
+    _ = rt_get_tex;
+    _ = rt_get_dim;
+    _ = rt_present;
+    _ = rt_needs_resize;
+    _ = rt_resize;
 }
