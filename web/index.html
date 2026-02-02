@@ -1,0 +1,153 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <meta name="description" content="Zig GUI Experiment - WebGPU Rendering">
+    <title>Zig GUI Experiment</title>
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+        html, body {
+            width: 100%;
+            height: 100%;
+            overflow: hidden;
+            background: #1a1a2e;
+        }
+        #canvas {
+            display: block;
+            width: 100%;
+            height: 100%;
+        }
+        .error-message {
+            position: fixed;
+            top: 50%;
+            left: 50%;
+            transform: translate(-50%, -50%);
+            color: #ff6b6b;
+            font-family: monospace;
+            font-size: 18px;
+            text-align: center;
+            padding: 20px;
+            background: rgba(0, 0, 0, 0.8);
+            border-radius: 8px;
+            max-width: 80%;
+        }
+    </style>
+</head>
+<body>
+    <canvas id="canvas"></canvas>
+
+    <script type="module">
+        // Zig GUI Experiment - WebGPU WASM Loader
+        // This script loads the WASM module and initializes WebGPU rendering.
+
+        async function main() {
+            // Check for WebGPU support
+            if (!navigator.gpu) {
+                showError("WebGPU is not supported in this browser.\n\nPlease use Chrome 113+, Edge 113+, or Firefox Nightly with WebGPU enabled.");
+                return;
+            }
+
+            const canvas = document.getElementById("canvas");
+            if (!canvas) {
+                showError("Canvas element not found");
+                return;
+            }
+
+            // Set canvas size to match window, accounting for device pixel ratio
+            function resizeCanvas() {
+                const dpr = window.devicePixelRatio || 1;
+                canvas.width = Math.floor(window.innerWidth * dpr);
+                canvas.height = Math.floor(window.innerHeight * dpr);
+            }
+            resizeCanvas();
+            window.addEventListener("resize", resizeCanvas);
+
+            try {
+                // Request WebGPU adapter and device
+                const adapter = await navigator.gpu.requestAdapter({
+                    powerPreference: "high-performance"
+                });
+                if (!adapter) {
+                    showError("Failed to get WebGPU adapter.\n\nYour GPU may not support WebGPU.");
+                    return;
+                }
+
+                const device = await adapter.requestDevice();
+                if (!device) {
+                    showError("Failed to get WebGPU device.");
+                    return;
+                }
+
+                // Configure canvas context for WebGPU
+                const context = canvas.getContext("webgpu");
+                if (!context) {
+                    showError("Failed to get WebGPU context from canvas.");
+                    return;
+                }
+
+                const format = navigator.gpu.getPreferredCanvasFormat();
+                context.configure({
+                    device: device,
+                    format: format,
+                    alphaMode: "opaque"
+                });
+
+                console.log("WebGPU initialized successfully");
+                console.log("Canvas size:", canvas.width, "x", canvas.height);
+                console.log("Preferred format:", format);
+
+                // Load and instantiate the WASM module
+                const wasmPath = "zig_gui_experiment.wasm";
+                const response = await fetch(wasmPath);
+                if (!response.ok) {
+                    showError(`Failed to fetch WASM module: ${response.status} ${response.statusText}\n\nMake sure to build with: zig build -Dtarget=wasm32-emscripten`);
+                    return;
+                }
+
+                const wasmBytes = await response.arrayBuffer();
+                console.log("WASM module loaded:", wasmBytes.byteLength, "bytes");
+
+                // Import object for WASM instantiation
+                // The Zig WASM module exports memory and imports browser APIs via Emscripten
+                const importObject = {
+                    env: {
+                        // Placeholder for environment imports
+                        // Emscripten-compiled WASM may require additional imports
+                    }
+                };
+
+                const { instance } = await WebAssembly.instantiate(wasmBytes, importObject);
+                console.log("WASM module instantiated");
+
+                // Call the WASM entry point
+                if (instance.exports.wasm_main) {
+                    console.log("Calling wasm_main...");
+                    instance.exports.wasm_main();
+                } else {
+                    console.warn("wasm_main export not found in WASM module");
+                }
+
+            } catch (error) {
+                console.error("Initialization error:", error);
+                showError(`Failed to initialize: ${error.message}`);
+            }
+        }
+
+        function showError(message) {
+            const div = document.createElement("div");
+            div.className = "error-message";
+            div.textContent = message;
+            document.body.appendChild(div);
+            console.error(message);
+        }
+
+        // Start the application
+        main();
+    </script>
+</body>
+</html>
