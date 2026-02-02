@@ -544,6 +544,48 @@ pub const OffscreenRenderTarget = struct {
         log.debug("initiated async map of staging buffer ({} bytes) for CPU read", .{buffer_size});
     }
 
+    /// Wait for an async buffer map operation to complete.
+    /// Polls the device until the mapping callback has been invoked.
+    ///
+    /// Dawn (the WebGPU implementation used by zgpu) processes async operations
+    /// synchronously during device.tick(), so we poll in a loop until the
+    /// callback sets ctx.completed to true.
+    ///
+    /// Parameters:
+    /// - ctx: The MapCallbackContext passed to mapStagingBuffer().
+    ///   Must be the same context to track the correct operation.
+    ///
+    /// Returns:
+    /// - true if mapping succeeded (ctx.status == .success)
+    /// - false if mapping failed (check ctx.status for the error)
+    ///
+    /// Usage:
+    /// ```
+    /// var map_ctx: MapCallbackContext = .{};
+    /// offscreen_target.mapStagingBuffer(&map_ctx);
+    /// if (offscreen_target.waitForMap(&map_ctx)) {
+    ///     // Access data via staging_buffer.getConstMappedRange()
+    /// } else {
+    ///     // Handle error based on map_ctx.status
+    /// }
+    /// ```
+    pub fn waitForMap(self: *const Self, ctx: *MapCallbackContext) bool {
+        // Poll the device until the mapping callback is invoked.
+        // Dawn processes async operations during tick(), so we loop
+        // until the callback sets completed to true.
+        while (!ctx.completed) {
+            self.device.tick();
+        }
+
+        if (ctx.status != .success) {
+            log.err("buffer map failed with status: {}", .{ctx.status});
+            return false;
+        }
+
+        log.debug("buffer map completed successfully", .{});
+        return true;
+    }
+
     // Implementation functions for the RenderTarget interface.
 
     fn getTextureViewImpl(render_target: *RenderTarget) RenderTargetError!zgpu.wgpu.TextureView {
