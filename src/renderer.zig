@@ -160,6 +160,30 @@ pub const Color = struct {
             .a = @as(f32, @floatFromInt(a)) / 255.0,
         };
     }
+
+    /// Create a Color from a 24-bit RGB hex value (e.g., 0xFF5500 for orange).
+    /// Extracts channels using bit shifts. Alpha defaults to 1.0 (fully opaque).
+    /// Common web color format support.
+    pub fn fromHex(hex: u24) Color {
+        return .{
+            .r = @as(f32, @floatFromInt((hex >> 16) & 0xFF)) / 255.0,
+            .g = @as(f32, @floatFromInt((hex >> 8) & 0xFF)) / 255.0,
+            .b = @as(f32, @floatFromInt(hex & 0xFF)) / 255.0,
+            .a = 1.0,
+        };
+    }
+
+    /// Create a Color from a 32-bit RGBA hex value (e.g., 0xFF550080 for semi-transparent orange).
+    /// Extracts channels using bit shifts including alpha.
+    /// Format: 0xRRGGBBAA.
+    pub fn fromHexRgba(hex: u32) Color {
+        return .{
+            .r = @as(f32, @floatFromInt((hex >> 24) & 0xFF)) / 255.0,
+            .g = @as(f32, @floatFromInt((hex >> 16) & 0xFF)) / 255.0,
+            .b = @as(f32, @floatFromInt((hex >> 8) & 0xFF)) / 255.0,
+            .a = @as(f32, @floatFromInt(hex & 0xFF)) / 255.0,
+        };
+    }
 };
 
 /// RGB vertex color type for GPU vertex attributes.
