@@ -973,6 +973,22 @@ pub const WebPlatform = struct {
             log.info("mousedown event listener registered on canvas", .{});
         }
 
+        // Register mouseup event listener via Emscripten HTML5 API.
+        // Combined with mousedown, enables tracking button pressed/released state throughout interaction.
+        // Target the canvas element to capture mouse button releases over the rendering area.
+        const mouseup_result = emscripten.emscripten_set_mouseup_callback(
+            canvas_selector,
+            null, // user_data - we use global_web_platform instead
+            true, // use_capture - capture phase for reliable event handling
+            mouseupCallback,
+        );
+
+        if (mouseup_result != emscripten.EMSCRIPTEN_RESULT_SUCCESS) {
+            log.warn("failed to register mouseup callback (result={})", .{mouseup_result});
+        } else {
+            log.info("mouseup event listener registered on canvas", .{});
+        }
+
         return Self{
             .allocator = allocator,
             .width = width,
@@ -1047,6 +1063,33 @@ pub const WebPlatform = struct {
                 else => return false, // Unknown button, ignore
             };
             p.updateMouseButton(button, true);
+        }
+        // Return false to allow event propagation to other handlers.
+        return false;
+    }
+
+    /// Emscripten mouseup event callback.
+    /// Called by the browser when a mouse button is released over the canvas element.
+    /// Updates the global platform's mouse button state based on which button was released.
+    ///
+    /// Combined with mousedownCallback, this enables tracking the pressed/released state
+    /// of mouse buttons throughout user interaction with the canvas.
+    fn mouseupCallback(
+        _: c_int, // event_type - always EMSCRIPTEN_EVENT_MOUSEUP
+        mouse_event: *const emscripten.EmscriptenMouseEvent,
+        _: ?*anyopaque, // user_data - unused, we use global_web_platform
+    ) callconv(.c) bool {
+        // Access the global platform instance to update mouse button state.
+        if (global_web_platform) |p| {
+            // Convert DOM button code to our MouseButton enum.
+            // DOM button codes: 0=left, 1=middle, 2=right
+            const button: platform_mod.MouseButton = switch (mouse_event.button) {
+                0 => .left,
+                1 => .middle,
+                2 => .right,
+                else => return false, // Unknown button, ignore
+            };
+            p.updateMouseButton(button, false);
         }
         // Return false to allow event propagation to other handlers.
         return false;
