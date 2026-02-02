@@ -93,9 +93,48 @@ pub const Vertex = extern struct {
     }
 };
 
-/// RGB color type for vertex coloring.
+/// RGBA color type for vertex coloring and general color representation.
 /// Values are normalized floats in range [0.0, 1.0].
-pub const Color = [3]f32;
+/// The alpha channel enables future transparency support.
+pub const Color = struct {
+    /// Red component [0.0, 1.0].
+    r: f32,
+    /// Green component [0.0, 1.0].
+    g: f32,
+    /// Blue component [0.0, 1.0].
+    b: f32,
+    /// Alpha component [0.0, 1.0]. 1.0 = fully opaque, 0.0 = fully transparent.
+    a: f32 = 1.0,
+
+    /// White color constant (fully opaque).
+    pub const white: Color = .{ .r = 1.0, .g = 1.0, .b = 1.0, .a = 1.0 };
+
+    /// Convert to RGB array for vertex attribute compatibility.
+    /// Discards the alpha channel for use with current vertex format.
+    pub fn toRgb(self: Color) [3]f32 {
+        return .{ self.r, self.g, self.b };
+    }
+
+    /// Create a Color from an RGB array (alpha defaults to 1.0).
+    pub fn fromRgb(rgb_array: [3]f32) Color {
+        return .{ .r = rgb_array[0], .g = rgb_array[1], .b = rgb_array[2], .a = 1.0 };
+    }
+
+    /// Create a Color from individual RGB values (alpha defaults to 1.0).
+    pub fn rgb(r: f32, g: f32, b: f32) Color {
+        return .{ .r = r, .g = g, .b = b, .a = 1.0 };
+    }
+
+    /// Create a Color from individual RGBA values.
+    pub fn rgba(r: f32, g: f32, b: f32, a: f32) Color {
+        return .{ .r = r, .g = g, .b = b, .a = a };
+    }
+};
+
+/// RGB vertex color type for GPU vertex attributes.
+/// This is the low-level format matching the vertex buffer layout (vec3<f32> in WGSL).
+/// For high-level color operations, use the Color struct instead.
+pub const VertexColor = [3]f32;
 
 /// A triangle draw command containing three vertices with positions and colors.
 /// Positions are in screen coordinates (pixels), origin at top-left.
@@ -106,8 +145,8 @@ pub const Color = [3]f32;
 pub const Triangle = struct {
     /// Three vertex positions in screen coordinates (x, y in pixels).
     positions: [3][2]f32,
-    /// Color at each vertex for gradient interpolation.
-    colors: [3]Color,
+    /// Color at each vertex for gradient interpolation (RGB format for GPU).
+    colors: [3]VertexColor,
 
     /// Create a Triangle from an array of Vertex structs.
     /// Convenience function for converting between representations.
@@ -582,10 +621,10 @@ pub const Renderer = struct {
     ///
     /// Parameters:
     /// - positions: Three vertex positions in screen coordinates (x, y in pixels).
-    /// - colors: Color at each vertex for gradient interpolation.
+    /// - colors: RGB color at each vertex for gradient interpolation.
     ///
     /// Note: The command buffer must be processed during endFrame to render the queued triangles.
-    pub fn queueTriangle(self: *Self, positions: [3][2]f32, colors: [3]Color) void {
+    pub fn queueTriangle(self: *Self, positions: [3][2]f32, colors: [3]VertexColor) void {
         const triangle: Triangle = .{
             .positions = positions,
             .colors = colors,
