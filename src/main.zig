@@ -369,9 +369,13 @@ const wasm_exports = if (is_wasm) struct {
         // Update application state
         state.app.update(delta_time, mouse_state);
 
-        // Log progress occasionally (every 60 frames = ~1 second at 60 FPS)
-        if (state.platform.frame_count % 60 == 1) {
-            log.info("web frame {} (dt={d:.3}s)", .{ state.platform.frame_count, delta_time });
+        // Log frame callback invocations for browser console debugging.
+        // First frame logs to confirm main loop started; then every 60 frames (~1s at 60 FPS).
+        const frame = state.platform.frame_count;
+        if (frame == 1) {
+            log.info("web main loop started - frame callback running", .{});
+        } else if (frame % 60 == 0) {
+            log.info("web frame {} (dt={d:.3}s) - loop running", .{ frame, delta_time });
         }
 
         // Render frame if renderer and render target are available.
