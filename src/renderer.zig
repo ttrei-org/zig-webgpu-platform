@@ -200,11 +200,14 @@ pub const VertexColor = [3]f32;
 pub const Triangle = struct {
     /// Three vertex positions in screen coordinates (x, y in pixels).
     positions: [3][2]f32,
-    /// Color at each vertex for gradient interpolation (RGB format for GPU).
-    colors: [3]VertexColor,
+    /// Color at each vertex for gradient interpolation.
+    /// Uses the Color type for richer color manipulation; alpha is ignored during
+    /// GPU upload (only RGB is used in the current vertex format).
+    colors: [3]Color,
 
     /// Create a Triangle from an array of Vertex structs.
     /// Convenience function for converting between representations.
+    /// Note: Converts from VertexColor (RGB array) to Color (loses no data, alpha defaults to 1.0).
     pub fn fromVertices(vertices: [3]Vertex) Triangle {
         return .{
             .positions = .{
@@ -213,19 +216,20 @@ pub const Triangle = struct {
                 vertices[2].position,
             },
             .colors = .{
-                vertices[0].color,
-                vertices[1].color,
-                vertices[2].color,
+                Color.fromRgb(vertices[0].color),
+                Color.fromRgb(vertices[1].color),
+                Color.fromRgb(vertices[2].color),
             },
         };
     }
 
     /// Convert back to an array of Vertex structs for GPU rendering.
+    /// Extracts RGB components from Color (alpha is currently ignored).
     pub fn toVertices(self: Triangle) [3]Vertex {
         return .{
-            .{ .position = self.positions[0], .color = self.colors[0] },
-            .{ .position = self.positions[1], .color = self.colors[1] },
-            .{ .position = self.positions[2], .color = self.colors[2] },
+            .{ .position = self.positions[0], .color = self.colors[0].toRgb() },
+            .{ .position = self.positions[1], .color = self.colors[1].toRgb() },
+            .{ .position = self.positions[2], .color = self.colors[2].toRgb() },
         };
     }
 };
@@ -676,10 +680,11 @@ pub const Renderer = struct {
     ///
     /// Parameters:
     /// - positions: Three vertex positions in screen coordinates (x, y in pixels).
-    /// - colors: RGB color at each vertex for gradient interpolation.
+    /// - colors: Color at each vertex for gradient interpolation.
+    ///   Alpha channel is stored but currently ignored during rendering.
     ///
     /// Note: The command buffer must be processed during endFrame to render the queued triangles.
-    pub fn queueTriangle(self: *Self, positions: [3][2]f32, colors: [3]VertexColor) void {
+    pub fn queueTriangle(self: *Self, positions: [3][2]f32, colors: [3]Color) void {
         const triangle: Triangle = .{
             .positions = positions,
             .colors = colors,

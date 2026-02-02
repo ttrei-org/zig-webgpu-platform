@@ -10,6 +10,7 @@ const std = @import("std");
 
 const renderer_mod = @import("renderer.zig");
 const Renderer = renderer_mod.Renderer;
+const Color = renderer_mod.Color;
 
 const log = std.log.scoped(.app);
 
@@ -91,6 +92,7 @@ pub const App = struct {
         // For a 400x300 window, triangles are positioned across the viewport.
 
         // Triangle 1: Large centered RGB triangle (classic test pattern)
+        // Uses Color constants for primary colors.
         renderer.queueTriangle(
             .{
                 .{ 100.0, 225.0 }, // Bottom-left
@@ -98,13 +100,14 @@ pub const App = struct {
                 .{ 200.0, 75.0 }, // Top-center
             },
             .{
-                .{ 1.0, 0.0, 0.0 }, // Red
-                .{ 0.0, 1.0, 0.0 }, // Green
-                .{ 0.0, 0.0, 1.0 }, // Blue
+                Color.red,
+                Color.green,
+                Color.blue,
             },
         );
 
         // Triangle 2: Small yellow triangle (top-left corner)
+        // Uses Color.rgb() helper for custom colors.
         renderer.queueTriangle(
             .{
                 .{ 20.0, 80.0 }, // Bottom-left
@@ -112,13 +115,14 @@ pub const App = struct {
                 .{ 50.0, 20.0 }, // Top-center
             },
             .{
-                .{ 1.0, 1.0, 0.0 }, // Yellow
-                .{ 1.0, 0.8, 0.0 }, // Orange-yellow
-                .{ 1.0, 1.0, 0.2 }, // Light yellow
+                Color.yellow, // Yellow constant
+                Color.rgb(1.0, 0.8, 0.0), // Orange-yellow
+                Color.rgb(1.0, 1.0, 0.2), // Light yellow
             },
         );
 
         // Triangle 3: Small cyan triangle (top-right corner)
+        // Uses Color constant and Color.rgb() helper.
         renderer.queueTriangle(
             .{
                 .{ 320.0, 80.0 }, // Bottom-left
@@ -126,13 +130,14 @@ pub const App = struct {
                 .{ 350.0, 20.0 }, // Top-center
             },
             .{
-                .{ 0.0, 1.0, 1.0 }, // Cyan
-                .{ 0.0, 0.8, 1.0 }, // Light blue
-                .{ 0.2, 1.0, 1.0 }, // Bright cyan
+                Color.cyan,
+                Color.rgb(0.0, 0.8, 1.0), // Light blue
+                Color.rgb(0.2, 1.0, 1.0), // Bright cyan
             },
         );
 
         // Triangle 4: Small magenta triangle (bottom-left corner)
+        // Uses Color constant and Color.rgb() helper.
         renderer.queueTriangle(
             .{
                 .{ 20.0, 280.0 }, // Bottom-left
@@ -140,13 +145,14 @@ pub const App = struct {
                 .{ 50.0, 240.0 }, // Top-center
             },
             .{
-                .{ 1.0, 0.0, 1.0 }, // Magenta
-                .{ 0.8, 0.0, 1.0 }, // Purple
-                .{ 1.0, 0.2, 1.0 }, // Light magenta
+                Color.magenta,
+                Color.rgb(0.8, 0.0, 1.0), // Purple
+                Color.rgb(1.0, 0.2, 1.0), // Light magenta
             },
         );
 
         // Triangle 5: Small white/gray triangle (bottom-right corner)
+        // Uses Color.rgb() helper for grayscale tones.
         renderer.queueTriangle(
             .{
                 .{ 320.0, 280.0 }, // Bottom-left
@@ -154,9 +160,9 @@ pub const App = struct {
                 .{ 350.0, 240.0 }, // Top-center
             },
             .{
-                .{ 0.8, 0.8, 0.8 }, // Light gray
-                .{ 1.0, 1.0, 1.0 }, // White
-                .{ 0.6, 0.6, 0.6 }, // Medium gray
+                Color.rgb(0.8, 0.8, 0.8), // Light gray
+                Color.white,
+                Color.rgb(0.6, 0.6, 0.6), // Medium gray
             },
         );
     }
