@@ -120,8 +120,8 @@ pub fn main() void {
         // Get mouse state for debug display
         const mouse_state = platform.getMouseState();
 
-        // Update application state with mouse position
-        app.update(delta_time, mouse_state.x, mouse_state.y);
+        // Update application state with full mouse state (position and buttons)
+        app.update(delta_time, mouse_state);
 
         // Begin frame - get swap chain texture and command encoder
         const frame_state = renderer.beginFrame() catch |err| {

@@ -8,6 +8,9 @@
 
 const std = @import("std");
 
+const platform_mod = @import("platform.zig");
+const MouseState = platform_mod.MouseState;
+
 const renderer_mod = @import("renderer.zig");
 const Renderer = renderer_mod.Renderer;
 const Color = renderer_mod.Color;
@@ -35,11 +38,13 @@ pub const App = struct {
     /// Frame counter for diagnostics and timing.
     frame_count: u64,
 
-    /// Current mouse X position in screen coordinates.
-    mouse_x: f32,
+    /// Current mouse state including position and button states.
+    mouse_state: MouseState,
 
-    /// Current mouse Y position in screen coordinates.
-    mouse_y: f32,
+    /// Previous mouse button states for detecting state changes.
+    prev_left_pressed: bool,
+    prev_right_pressed: bool,
+    prev_middle_pressed: bool,
 
     /// Initialize the application with the given allocator.
     /// The allocator is stored for any dynamic allocations the app may need.
@@ -49,8 +54,16 @@ pub const App = struct {
             .allocator = allocator,
             .running = true,
             .frame_count = 0,
-            .mouse_x = 0,
-            .mouse_y = 0,
+            .mouse_state = .{
+                .x = 0,
+                .y = 0,
+                .left_pressed = false,
+                .right_pressed = false,
+                .middle_pressed = false,
+            },
+            .prev_left_pressed = false,
+            .prev_right_pressed = false,
+            .prev_middle_pressed = false,
         };
     }
 
@@ -80,25 +93,43 @@ pub const App = struct {
     /// Parameters:
     /// - delta_time: Time elapsed since last frame in seconds.
     ///   Used for frame-rate independent movement and animations.
-    /// - mouse_x: Current mouse X position in screen coordinates.
-    /// - mouse_y: Current mouse Y position in screen coordinates.
-    pub fn update(self: *Self, delta_time: f32, mouse_x: f32, mouse_y: f32) void {
+    /// - mouse_state: Current mouse state including position and button states.
+    pub fn update(self: *Self, delta_time: f32, mouse_state: MouseState) void {
         _ = delta_time; // Currently unused, will be used for animations
         self.frame_count += 1;
 
         // Log mouse position changes for debug verification.
         // Only log when position changes significantly to avoid spam.
-        const prev_x = self.mouse_x;
-        const prev_y = self.mouse_y;
-        self.mouse_x = mouse_x;
-        self.mouse_y = mouse_y;
+        const prev_x = self.mouse_state.x;
+        const prev_y = self.mouse_state.y;
 
         // Log every 60 frames (~1 second at 60 FPS) if position changed
         if (self.frame_count % 60 == 0) {
-            if (@abs(mouse_x - prev_x) > 0.1 or @abs(mouse_y - prev_y) > 0.1) {
-                log.info("mouse position: ({d:.1}, {d:.1})", .{ mouse_x, mouse_y });
+            if (@abs(mouse_state.x - prev_x) > 0.1 or @abs(mouse_state.y - prev_y) > 0.1) {
+                log.info("mouse position: ({d:.1}, {d:.1})", .{ mouse_state.x, mouse_state.y });
             }
         }
+
+        // Log button state changes for debug verification.
+        // Each press/release is logged immediately for testing.
+        if (mouse_state.left_pressed != self.prev_left_pressed) {
+            const action = if (mouse_state.left_pressed) "pressed" else "released";
+            log.info("left button {s}", .{action});
+        }
+        if (mouse_state.right_pressed != self.prev_right_pressed) {
+            const action = if (mouse_state.right_pressed) "pressed" else "released";
+            log.info("right button {s}", .{action});
+        }
+        if (mouse_state.middle_pressed != self.prev_middle_pressed) {
+            const action = if (mouse_state.middle_pressed) "pressed" else "released";
+            log.info("middle button {s}", .{action});
+        }
+
+        // Store current state for next frame comparison
+        self.prev_left_pressed = mouse_state.left_pressed;
+        self.prev_right_pressed = mouse_state.right_pressed;
+        self.prev_middle_pressed = mouse_state.middle_pressed;
+        self.mouse_state = mouse_state;
     }
 
     /// Called once per frame after update to queue draw commands.
@@ -345,8 +376,8 @@ pub const App = struct {
         // Mouse position debug display - visual crosshair at current mouse location.
         // Verifies mouse position updates correctly with (0,0) at top-left,
         // X increasing rightward, Y increasing downward.
-        const mouse_x = self.mouse_x;
-        const mouse_y = self.mouse_y;
+        const mouse_x = self.mouse_state.x;
+        const mouse_y = self.mouse_state.y;
         const crosshair_size: f32 = 8.0;
         const crosshair_thickness: f32 = 2.0;
 
@@ -385,6 +416,51 @@ pub const App = struct {
             },
             .{ Color.white, Color.white, Color.white },
         );
+
+        // Mouse button state indicators - three squares in bottom-left area.
+        // Each square represents a button: Left, Right, Middle (from left to right).
+        // Bright color = pressed, dim color = released.
+        // This provides visual feedback for verifying button press/release detection.
+        const btn_base_x: f32 = 60.0;
+        const btn_base_y: f32 = 200.0;
+        const btn_size: f32 = 20.0;
+        const btn_spacing: f32 = 25.0;
+
+        // Helper to draw a button indicator (two triangles forming a square)
+        const btn_colors = [3]struct { pressed: Color, released: Color }{
+            .{ .pressed = Color.red, .released = Color.rgb(0.3, 0.0, 0.0) }, // Left: Red
+            .{ .pressed = Color.green, .released = Color.rgb(0.0, 0.3, 0.0) }, // Right: Green
+            .{ .pressed = Color.blue, .released = Color.rgb(0.0, 0.0, 0.3) }, // Middle: Blue
+        };
+        const btn_states = [3]bool{
+            self.mouse_state.left_pressed,
+            self.mouse_state.right_pressed,
+            self.mouse_state.middle_pressed,
+        };
+
+        for (0..3) |i| {
+            const x = btn_base_x + @as(f32, @floatFromInt(i)) * btn_spacing;
+            const color = if (btn_states[i]) btn_colors[i].pressed else btn_colors[i].released;
+
+            // First triangle of square (top-left half)
+            renderer.queueTriangle(
+                .{
+                    .{ x, btn_base_y },
+                    .{ x + btn_size, btn_base_y },
+                    .{ x, btn_base_y + btn_size },
+                },
+                .{ color, color, color },
+            );
+            // Second triangle of square (bottom-right half)
+            renderer.queueTriangle(
+                .{
+                    .{ x + btn_size, btn_base_y },
+                    .{ x + btn_size, btn_base_y + btn_size },
+                    .{ x, btn_base_y + btn_size },
+                },
+                .{ color, color, color },
+            );
+        }
 
         // Z-order test: Overlapping triangles to verify painter's algorithm.
         // Since there is no depth buffer, draw order = depth order.
@@ -450,11 +526,19 @@ test "App update increments frame count" {
     var app = App.init(std.testing.allocator);
     defer app.deinit();
 
-    app.update(0.016, 100.0, 50.0); // ~60 FPS with mouse at (100, 50)
+    const mouse_state: MouseState = .{
+        .x = 100.0,
+        .y = 50.0,
+        .left_pressed = false,
+        .right_pressed = false,
+        .middle_pressed = false,
+    };
+
+    app.update(0.016, mouse_state); // ~60 FPS with mouse at (100, 50)
     try std.testing.expectEqual(@as(u64, 1), app.getFrameCount());
 
-    app.update(0.016, 110.0, 60.0);
-    app.update(0.016, 120.0, 70.0);
+    app.update(0.016, .{ .x = 110.0, .y = 60.0, .left_pressed = false, .right_pressed = false, .middle_pressed = false });
+    app.update(0.016, .{ .x = 120.0, .y = 70.0, .left_pressed = false, .right_pressed = false, .middle_pressed = false });
     try std.testing.expectEqual(@as(u64, 3), app.getFrameCount());
 }
 
