@@ -2034,6 +2034,10 @@ pub const Renderer = struct {
             return RendererError.ScreenshotFailed;
         };
 
+        // Verify pixel data is accessible from CPU (bd-3m2).
+        // This confirms the GPU->CPU data path works correctly.
+        verifyPixelData(mapped_data, width, height, aligned_bytes_per_row);
+
         // Write to PNG file - offscreen uses RGBA format (not BGRA)
         self.writePngFileRgba(filename, mapped_data, width, height, aligned_bytes_per_row) catch |err| {
             log.err("failed to write offscreen PNG file: {}", .{err});
@@ -2045,6 +2049,135 @@ pub const Renderer = struct {
         staging_buffer.unmap();
 
         log.info("offscreen screenshot saved to: {s}", .{filename});
+    }
+
+    /// Verify that pixel data from GPU readback is accessible and valid.
+    /// Reads pixels at specific locations and logs their RGBA values.
+    /// Verifies: background matches expected clear color, rendered areas have content.
+    ///
+    /// This function confirms the GPU->CPU data path works correctly (bd-3m2).
+    fn verifyPixelData(data: []const u8, width: u32, height: u32, aligned_bytes_per_row: u32) void {
+        log.info("=== Pixel Data Verification (GPU->CPU readback) ===", .{});
+        log.info("image dimensions: {}x{}, row stride: {} bytes", .{ width, height, aligned_bytes_per_row });
+        log.info("total buffer size: {} bytes", .{data.len});
+
+        // Helper to read a pixel at (x, y) - returns RGBA tuple
+        const getPixel = struct {
+            fn get(pixel_data: []const u8, x: u32, y: u32, stride: u32) struct { r: u8, g: u8, b: u8, a: u8 } {
+                const offset = @as(usize, y) * @as(usize, stride) + @as(usize, x) * 4;
+                if (offset + 3 >= pixel_data.len) {
+                    return .{ .r = 0, .g = 0, .b = 0, .a = 0 };
+                }
+                return .{
+                    .r = pixel_data[offset],
+                    .g = pixel_data[offset + 1],
+                    .b = pixel_data[offset + 2],
+                    .a = pixel_data[offset + 3],
+                };
+            }
+        }.get;
+
+        // Expected cornflower blue clear color: (0.39, 0.58, 0.93, 1.0) as RGBA8
+        // R: 0.39 * 255 = 99.45 -> 99
+        // G: 0.58 * 255 = 147.9 -> 148
+        // B: 0.93 * 255 = 237.15 -> 237
+        // A: 255
+        const expected_bg = struct {
+            const r: u8 = 99;
+            const g: u8 = 148;
+            const b: u8 = 237;
+            const a: u8 = 255;
+        };
+
+        // Sample locations to verify:
+        // 1. Corners - should be background (cornflower blue)
+        // 2. Center area (200, 150 in the app's 400x300 coordinate space) - should have rendered content
+        // We'll check at (0,0), (width-1, 0), (0, height-1), (width-1, height-1) for background
+        // And check around center for rendered content (starburst pattern)
+
+        log.info("--- Background verification (corners should be cornflower blue) ---", .{});
+
+        const corners = [_]struct { x: u32, y: u32, name: []const u8 }{
+            .{ .x = 0, .y = 0, .name = "top-left" },
+            .{ .x = width - 1, .y = 0, .name = "top-right" },
+            .{ .x = 0, .y = height - 1, .name = "bottom-left" },
+            .{ .x = width - 1, .y = height - 1, .name = "bottom-right" },
+        };
+
+        var bg_matches: u32 = 0;
+        for (corners) |corner| {
+            const px = getPixel(data, corner.x, corner.y, aligned_bytes_per_row);
+            const is_bg = (absDiff(px.r, expected_bg.r) <= 2) and
+                (absDiff(px.g, expected_bg.g) <= 2) and
+                (absDiff(px.b, expected_bg.b) <= 2) and
+                (px.a == expected_bg.a);
+
+            log.info("  {s} ({}, {}): RGBA({}, {}, {}, {}) {s}", .{
+                corner.name,
+                corner.x,
+                corner.y,
+                px.r,
+                px.g,
+                px.b,
+                px.a,
+                if (is_bg) "[OK: matches background]" else "[UNEXPECTED]",
+            });
+            if (is_bg) bg_matches += 1;
+        }
+
+        log.info("--- Center area verification (should have rendered content) ---", .{});
+
+        // Check center of the starburst (around 200, 150)
+        // Also check a few points within the starburst radius
+        const center_points = [_]struct { x: u32, y: u32, name: []const u8 }{
+            .{ .x = 200, .y = 150, .name = "center" },
+            .{ .x = 200, .y = 100, .name = "above-center" },
+            .{ .x = 250, .y = 150, .name = "right-of-center" },
+            .{ .x = 200, .y = 200, .name = "below-center" },
+            .{ .x = 150, .y = 150, .name = "left-of-center" },
+        };
+
+        var non_bg_count: u32 = 0;
+        for (center_points) |point| {
+            if (point.x >= width or point.y >= height) continue;
+
+            const px = getPixel(data, point.x, point.y, aligned_bytes_per_row);
+            const is_bg = (absDiff(px.r, expected_bg.r) <= 2) and
+                (absDiff(px.g, expected_bg.g) <= 2) and
+                (absDiff(px.b, expected_bg.b) <= 2);
+            const is_nonzero = (px.r != 0 or px.g != 0 or px.b != 0);
+
+            log.info("  {s} ({}, {}): RGBA({}, {}, {}, {}) {s}", .{
+                point.name,
+                point.x,
+                point.y,
+                px.r,
+                px.g,
+                px.b,
+                px.a,
+                if (!is_bg and is_nonzero) "[OK: rendered content]" else if (is_bg) "[background]" else "[zero]",
+            });
+            if (!is_bg and is_nonzero) non_bg_count += 1;
+        }
+
+        log.info("--- Verification Summary ---", .{});
+        log.info("  background corners matching: {}/4", .{bg_matches});
+        log.info("  center points with rendered content: {}/{}", .{ non_bg_count, center_points.len });
+
+        if (bg_matches == 4 and non_bg_count > 0) {
+            log.info("  RESULT: GPU->CPU pixel readback VERIFIED - data is valid!", .{});
+        } else if (bg_matches == 0 and non_bg_count == 0) {
+            log.warn("  RESULT: All pixels appear zero or unexpected - readback may have failed", .{});
+        } else {
+            log.info("  RESULT: Partial verification - some expected patterns found", .{});
+        }
+
+        log.info("=== End Pixel Data Verification ===", .{});
+    }
+
+    /// Helper: compute absolute difference between two u8 values
+    fn absDiff(a: u8, b: u8) u8 {
+        return if (a > b) a - b else b - a;
     }
 
     /// Write pixel data to a PNG file using zigimg.
