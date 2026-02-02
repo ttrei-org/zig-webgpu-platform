@@ -579,3 +579,72 @@ test "App requestQuit stops running" {
     app.requestQuit();
     try std.testing.expect(!app.isRunning());
 }
+
+test "Triangle moves to click position on left button press" {
+    var app = App.init(std.testing.allocator);
+    defer app.deinit();
+
+    // Initial triangle position should be at center (200, 150)
+    try std.testing.expectEqual(@as(f32, 200.0), app.triangle_position[0]);
+    try std.testing.expectEqual(@as(f32, 150.0), app.triangle_position[1]);
+
+    // First frame: mouse at (50, 75), no buttons pressed
+    app.update(0.016, .{ .x = 50.0, .y = 75.0, .left_pressed = false, .right_pressed = false, .middle_pressed = false });
+
+    // Triangle should still be at center (no click yet)
+    try std.testing.expectEqual(@as(f32, 200.0), app.triangle_position[0]);
+    try std.testing.expectEqual(@as(f32, 150.0), app.triangle_position[1]);
+
+    // Second frame: left button just pressed at (50, 75)
+    app.update(0.016, .{ .x = 50.0, .y = 75.0, .left_pressed = true, .right_pressed = false, .middle_pressed = false });
+
+    // Triangle should now be at click position (50, 75)
+    try std.testing.expectEqual(@as(f32, 50.0), app.triangle_position[0]);
+    try std.testing.expectEqual(@as(f32, 75.0), app.triangle_position[1]);
+
+    // Third frame: left button held, mouse moved to (100, 200)
+    app.update(0.016, .{ .x = 100.0, .y = 200.0, .left_pressed = true, .right_pressed = false, .middle_pressed = false });
+
+    // Triangle should NOT move while button is held (only on "just pressed")
+    try std.testing.expectEqual(@as(f32, 50.0), app.triangle_position[0]);
+    try std.testing.expectEqual(@as(f32, 75.0), app.triangle_position[1]);
+
+    // Fourth frame: button released
+    app.update(0.016, .{ .x = 100.0, .y = 200.0, .left_pressed = false, .right_pressed = false, .middle_pressed = false });
+
+    // Triangle should still be at (50, 75) after release
+    try std.testing.expectEqual(@as(f32, 50.0), app.triangle_position[0]);
+    try std.testing.expectEqual(@as(f32, 75.0), app.triangle_position[1]);
+
+    // Fifth frame: new click at (300, 250)
+    app.update(0.016, .{ .x = 300.0, .y = 250.0, .left_pressed = true, .right_pressed = false, .middle_pressed = false });
+
+    // Triangle should move to new click position
+    try std.testing.expectEqual(@as(f32, 300.0), app.triangle_position[0]);
+    try std.testing.expectEqual(@as(f32, 250.0), app.triangle_position[1]);
+}
+
+test "Triangle does not move on right or middle button press" {
+    var app = App.init(std.testing.allocator);
+    defer app.deinit();
+
+    // Initial triangle position at center
+    try std.testing.expectEqual(@as(f32, 200.0), app.triangle_position[0]);
+    try std.testing.expectEqual(@as(f32, 150.0), app.triangle_position[1]);
+
+    // First frame: no buttons pressed
+    app.update(0.016, .{ .x = 50.0, .y = 75.0, .left_pressed = false, .right_pressed = false, .middle_pressed = false });
+
+    // Right button press should not move triangle
+    app.update(0.016, .{ .x = 50.0, .y = 75.0, .left_pressed = false, .right_pressed = true, .middle_pressed = false });
+    try std.testing.expectEqual(@as(f32, 200.0), app.triangle_position[0]);
+    try std.testing.expectEqual(@as(f32, 150.0), app.triangle_position[1]);
+
+    // Release right button
+    app.update(0.016, .{ .x = 100.0, .y = 100.0, .left_pressed = false, .right_pressed = false, .middle_pressed = false });
+
+    // Middle button press should not move triangle
+    app.update(0.016, .{ .x = 100.0, .y = 100.0, .left_pressed = false, .right_pressed = false, .middle_pressed = true });
+    try std.testing.expectEqual(@as(f32, 200.0), app.triangle_position[0]);
+    try std.testing.expectEqual(@as(f32, 150.0), app.triangle_position[1]);
+}
