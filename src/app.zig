@@ -41,29 +41,28 @@ pub const App = struct {
     /// Current mouse state including position and button states.
     mouse_state: MouseState,
 
-    /// Previous mouse button states for detecting state changes.
-    prev_left_pressed: bool,
-    prev_right_pressed: bool,
-    prev_middle_pressed: bool,
+    /// Previous frame's mouse state for detecting state changes.
+    /// Enables detecting: button just pressed (current.left && !prev.left),
+    /// button just released (!current.left && prev.left), position delta.
+    prev_mouse_state: MouseState,
 
     /// Initialize the application with the given allocator.
     /// The allocator is stored for any dynamic allocations the app may need.
     pub fn init(allocator: std.mem.Allocator) Self {
         log.debug("initializing app", .{});
+        const initial_mouse_state: MouseState = .{
+            .x = 0,
+            .y = 0,
+            .left_pressed = false,
+            .right_pressed = false,
+            .middle_pressed = false,
+        };
         return Self{
             .allocator = allocator,
             .running = true,
             .frame_count = 0,
-            .mouse_state = .{
-                .x = 0,
-                .y = 0,
-                .left_pressed = false,
-                .right_pressed = false,
-                .middle_pressed = false,
-            },
-            .prev_left_pressed = false,
-            .prev_right_pressed = false,
-            .prev_middle_pressed = false,
+            .mouse_state = initial_mouse_state,
+            .prev_mouse_state = initial_mouse_state,
         };
     }
 
@@ -100,36 +99,31 @@ pub const App = struct {
 
         // Log mouse position changes for debug verification.
         // Only log when position changes significantly to avoid spam.
-        const prev_x = self.mouse_state.x;
-        const prev_y = self.mouse_state.y;
-
         // Log every 60 frames (~1 second at 60 FPS) if position changed
         if (self.frame_count % 60 == 0) {
-            if (@abs(mouse_state.x - prev_x) > 0.1 or @abs(mouse_state.y - prev_y) > 0.1) {
+            if (@abs(mouse_state.x - self.prev_mouse_state.x) > 0.1 or @abs(mouse_state.y - self.prev_mouse_state.y) > 0.1) {
                 log.info("mouse position: ({d:.1}, {d:.1})", .{ mouse_state.x, mouse_state.y });
             }
         }
 
         // Log button state changes for debug verification.
         // Each press/release is logged immediately for testing.
-        if (mouse_state.left_pressed != self.prev_left_pressed) {
+        if (mouse_state.left_pressed != self.prev_mouse_state.left_pressed) {
             const action = if (mouse_state.left_pressed) "pressed" else "released";
             log.info("left button {s}", .{action});
         }
-        if (mouse_state.right_pressed != self.prev_right_pressed) {
+        if (mouse_state.right_pressed != self.prev_mouse_state.right_pressed) {
             const action = if (mouse_state.right_pressed) "pressed" else "released";
             log.info("right button {s}", .{action});
         }
-        if (mouse_state.middle_pressed != self.prev_middle_pressed) {
+        if (mouse_state.middle_pressed != self.prev_mouse_state.middle_pressed) {
             const action = if (mouse_state.middle_pressed) "pressed" else "released";
             log.info("middle button {s}", .{action});
         }
 
         // Store current state for next frame comparison
-        self.prev_left_pressed = mouse_state.left_pressed;
-        self.prev_right_pressed = mouse_state.right_pressed;
-        self.prev_middle_pressed = mouse_state.middle_pressed;
         self.mouse_state = mouse_state;
+        self.prev_mouse_state = mouse_state;
     }
 
     /// Called once per frame after update to queue draw commands.
