@@ -106,6 +106,7 @@ pub const DesktopPlatform = struct {
 
         // Register GLFW input callbacks
         _ = window.setCursorPosCallback(cursorPosCallback);
+        _ = window.setMouseButtonCallback(mouseButtonCallback);
 
         log.info("window created successfully: {}x{}", .{ width, height });
     }
@@ -182,6 +183,29 @@ pub const DesktopPlatform = struct {
         };
         self.mouse_state.x = @floatCast(xpos);
         self.mouse_state.y = @floatCast(ypos);
+    }
+
+    /// GLFW mouse button callback.
+    /// Updates the mouse state with button press/release events.
+    /// Maps GLFW button constants to platform MouseButton enum.
+    fn mouseButtonCallback(
+        window: *zglfw.Window,
+        button: zglfw.MouseButton,
+        action: zglfw.Action,
+        mods: zglfw.Mods,
+    ) callconv(.c) void {
+        _ = mods;
+        const self = window.getUserPointer(Self) orelse {
+            log.warn("mouse button callback: no user pointer set", .{});
+            return;
+        };
+        const pressed = action == .press;
+        switch (button) {
+            .left => self.mouse_state.left_pressed = pressed,
+            .right => self.mouse_state.right_pressed = pressed,
+            .middle => self.mouse_state.middle_pressed = pressed,
+            else => {},
+        }
     }
 
     /// Convert platform-agnostic Key to GLFW key code.
