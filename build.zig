@@ -103,6 +103,7 @@ pub fn build(b: *std.Build) void {
         // The browser provides WebGPU via navigator.gpu, no linking required.
 
         exe.export_memory = true;
+        exe.export_table = true; // Export function table for emscripten_set_main_loop callbacks
         exe.initial_memory = 64 * 1024 * 1024; // 64MB initial heap
         exe.max_memory = null; // Allow memory growth (no upper limit)
         exe.import_symbols = true; // Allow imports from JS environment
@@ -129,41 +130,353 @@ pub fn build(b: *std.Build) void {
     // For web builds, also generate JavaScript glue code
     if (is_wasm) {
         // Create JavaScript loader file that instantiates the WASM module
-        // This provides the minimal glue code needed to load and run the WASM
-        // in a browser with WebGPU support
+        // This provides Emscripten runtime stubs and WebGPU integration
         const js_glue = b.addWriteFiles();
         _ = js_glue.add("zig_gui_experiment.js",
             \\// Generated JavaScript glue code for zig_gui_experiment.wasm
-            \\// This module provides WebGPU integration and WASM loading
+            \\// This module provides Emscripten runtime stubs and WebGPU integration
+            \\
+            \\// Global state for WASM module
+            \\let wasmInstance = null;
+            \\let wasmMemory = null;
+            \\let gpuDevice = null;
+            \\let gpuAdapter = null;
+            \\let gpuContext = null;
+            \\let canvasElement = null;
+            \\let mainLoopCallback = null;
+            \\let mainLoopRunning = false;
+            \\let animationFrameId = null;
+            \\
+            \\// Handle registry for WebGPU objects (maps integer handles to JS objects)
+            \\const handleRegistry = new Map();
+            \\let nextHandle = 1;
+            \\
+            \\function registerHandle(obj) {
+            \\    if (!obj) return 0;
+            \\    const handle = nextHandle++;
+            \\    handleRegistry.set(handle, obj);
+            \\    return handle;
+            \\}
+            \\
+            \\function getHandle(handle) {
+            \\    return handleRegistry.get(handle) || null;
+            \\}
+            \\
+            \\function freeHandle(handle) {
+            \\    handleRegistry.delete(handle);
+            \\}
+            \\
+            \\// Read a null-terminated string from WASM memory
+            \\function readCString(ptr) {
+            \\    if (!ptr || !wasmMemory) return "";
+            \\    const mem = new Uint8Array(wasmMemory.buffer);
+            \\    let end = ptr;
+            \\    while (mem[end] !== 0) end++;
+            \\    return new TextDecoder().decode(mem.subarray(ptr, end));
+            \\}
+            \\
+            \\// Write a 32-bit integer to WASM memory
+            \\function writeI32(ptr, value) {
+            \\    if (!wasmMemory) return;
+            \\    const view = new DataView(wasmMemory.buffer);
+            \\    view.setInt32(ptr, value, true); // little-endian
+            \\}
+            \\
+            \\// Write a 64-bit float to WASM memory
+            \\function writeF64(ptr, value) {
+            \\    if (!wasmMemory) return;
+            \\    const view = new DataView(wasmMemory.buffer);
+            \\    view.setFloat64(ptr, value, true); // little-endian
+            \\}
+            \\
+            \\// Emscripten runtime stubs
+            \\const emscriptenStubs = {
+            \\    // emscripten_return_address: Used for stack traces, return 0 (no info)
+            \\    emscripten_return_address: (level) => 0,
+            \\
+            \\    // emscripten_get_now: High-resolution timestamp in milliseconds
+            \\    emscripten_get_now: () => performance.now(),
+            \\
+            \\    // emscripten_set_main_loop: Set up requestAnimationFrame loop
+            \\    emscripten_set_main_loop: (funcPtr, fps, simulateInfiniteLoop) => {
+            \\        mainLoopCallback = funcPtr;
+            \\        mainLoopRunning = true;
+            \\
+            \\        // Find the function table - Zig may export it as __indirect_function_table
+            \\        const table = wasmInstance.exports.__indirect_function_table;
+            \\        if (!table) {
+            \\            console.error("Function table not found in WASM exports");
+            \\            console.log("Available exports:", Object.keys(wasmInstance.exports));
+            \\            return;
+            \\        }
+            \\
+            \\        function frame() {
+            \\            if (!mainLoopRunning) return;
+            \\            try {
+            \\                // Call the WASM callback function via the function table
+            \\                const func = table.get(funcPtr);
+            \\                if (!func) {
+            \\                    console.error("Function not found at index", funcPtr);
+            \\                    mainLoopRunning = false;
+            \\                    return;
+            \\                }
+            \\                func();
+            \\            } catch (e) {
+            \\                console.error("Main loop error:", e);
+            \\                console.error("Stack:", e.stack);
+            \\                mainLoopRunning = false;
+            \\                return;
+            \\            }
+            \\            animationFrameId = requestAnimationFrame(frame);
+            \\        }
+            \\
+            \\        animationFrameId = requestAnimationFrame(frame);
+            \\    },
+            \\
+            \\    // emscripten_cancel_main_loop: Stop the animation loop
+            \\    emscripten_cancel_main_loop: () => {
+            \\        mainLoopRunning = false;
+            \\        if (animationFrameId !== null) {
+            \\            cancelAnimationFrame(animationFrameId);
+            \\            animationFrameId = null;
+            \\        }
+            \\    },
+            \\
+            \\    // emscripten_get_canvas_element_size: Get canvas dimensions
+            \\    emscripten_get_canvas_element_size: (targetPtr, widthPtr, heightPtr) => {
+            \\        const canvas = canvasElement || document.getElementById("canvas");
+            \\        if (!canvas) {
+            \\            writeI32(widthPtr, 800);
+            \\            writeI32(heightPtr, 600);
+            \\            return -6; // EMSCRIPTEN_RESULT_FAILED
+            \\        }
+            \\        writeI32(widthPtr, canvas.width);
+            \\        writeI32(heightPtr, canvas.height);
+            \\        return 0; // EMSCRIPTEN_RESULT_SUCCESS
+            \\    },
+            \\
+            \\    // emscripten_get_device_pixel_ratio: Get DPI scaling
+            \\    emscripten_get_device_pixel_ratio: () => window.devicePixelRatio || 1.0,
+            \\
+            \\    // emscripten_get_element_css_size: Get CSS size of an element
+            \\    emscripten_get_element_css_size: (targetPtr, widthPtr, heightPtr) => {
+            \\        const canvas = canvasElement || document.getElementById("canvas");
+            \\        if (!canvas) {
+            \\            writeF64(widthPtr, 800);
+            \\            writeF64(heightPtr, 600);
+            \\            return -6; // EMSCRIPTEN_RESULT_FAILED
+            \\        }
+            \\        const rect = canvas.getBoundingClientRect();
+            \\        writeF64(widthPtr, rect.width);
+            \\        writeF64(heightPtr, rect.height);
+            \\        return 0; // EMSCRIPTEN_RESULT_SUCCESS
+            \\    },
+            \\
+            \\    // Mouse event callbacks - store callback pointers but don't register yet
+            \\    // (registration happens when WASM calls these, we just need to accept the call)
+            \\    emscripten_set_mousemove_callback_on_thread: (target, userData, useCapture, callback, thread) => {
+            \\        // For now, return success - full implementation would register DOM events
+            \\        console.log("emscripten_set_mousemove_callback_on_thread called");
+            \\        return 0;
+            \\    },
+            \\
+            \\    emscripten_set_mousedown_callback_on_thread: (target, userData, useCapture, callback, thread) => {
+            \\        console.log("emscripten_set_mousedown_callback_on_thread called");
+            \\        return 0;
+            \\    },
+            \\
+            \\    emscripten_set_mouseup_callback_on_thread: (target, userData, useCapture, callback, thread) => {
+            \\        console.log("emscripten_set_mouseup_callback_on_thread called");
+            \\        return 0;
+            \\    },
+            \\
+            \\    // HTML5 event cleanup
+            \\    emscripten_html5_remove_all_event_listeners: () => {
+            \\        console.log("emscripten_html5_remove_all_event_listeners called");
+            \\    },
+            \\};
+            \\
+            \\// WebGPU stubs - these bridge WASM calls to browser WebGPU API
+            \\// Note: Full implementation requires mapping WASM struct layouts to JS objects
+            \\const webgpuStubs = {
+            \\    wgpuDeviceCreateCommandEncoder: (deviceHandle, descriptorPtr) => {
+            \\        if (!gpuDevice) return 0;
+            \\        try {
+            \\            const encoder = gpuDevice.createCommandEncoder();
+            \\            return registerHandle(encoder);
+            \\        } catch (e) {
+            \\            console.error("wgpuDeviceCreateCommandEncoder error:", e);
+            \\            return 0;
+            \\        }
+            \\    },
+            \\
+            \\    wgpuCommandEncoderBeginRenderPass: (encoderHandle, descriptorPtr) => {
+            \\        const encoder = getHandle(encoderHandle);
+            \\        if (!encoder || !gpuContext) return 0;
+            \\        try {
+            \\            // Get current texture from canvas context
+            \\            const textureView = gpuContext.getCurrentTexture().createView();
+            \\            const renderPass = encoder.beginRenderPass({
+            \\                colorAttachments: [{
+            \\                    view: textureView,
+            \\                    clearValue: { r: 0.392, g: 0.584, b: 0.929, a: 1.0 }, // Cornflower blue
+            \\                    loadOp: "clear",
+            \\                    storeOp: "store",
+            \\                }],
+            \\            });
+            \\            return registerHandle(renderPass);
+            \\        } catch (e) {
+            \\            console.error("wgpuCommandEncoderBeginRenderPass error:", e);
+            \\            return 0;
+            \\        }
+            \\    },
+            \\
+            \\    wgpuRenderPassEncoderSetPipeline: (passHandle, pipelineHandle) => {
+            \\        const pass = getHandle(passHandle);
+            \\        const pipeline = getHandle(pipelineHandle);
+            \\        if (pass && pipeline) {
+            \\            pass.setPipeline(pipeline);
+            \\        }
+            \\    },
+            \\
+            \\    wgpuRenderPassEncoderSetBindGroup: (passHandle, index, groupHandle, dynamicOffsetCount, dynamicOffsets) => {
+            \\        const pass = getHandle(passHandle);
+            \\        const group = getHandle(groupHandle);
+            \\        if (pass && group) {
+            \\            pass.setBindGroup(index, group);
+            \\        }
+            \\    },
+            \\
+            \\    wgpuRenderPassEncoderSetVertexBuffer: (passHandle, slot, bufferHandle, offset, size) => {
+            \\        const pass = getHandle(passHandle);
+            \\        const buffer = getHandle(bufferHandle);
+            \\        if (pass && buffer) {
+            \\            pass.setVertexBuffer(slot, buffer, Number(offset), Number(size));
+            \\        }
+            \\    },
+            \\
+            \\    wgpuRenderPassEncoderDraw: (passHandle, vertexCount, instanceCount, firstVertex, firstInstance) => {
+            \\        const pass = getHandle(passHandle);
+            \\        if (pass) {
+            \\            pass.draw(vertexCount, instanceCount, firstVertex, firstInstance);
+            \\        }
+            \\    },
+            \\
+            \\    wgpuRenderPassEncoderEnd: (passHandle) => {
+            \\        const pass = getHandle(passHandle);
+            \\        if (pass) {
+            \\            pass.end();
+            \\            freeHandle(passHandle);
+            \\        }
+            \\    },
+            \\
+            \\    wgpuCommandEncoderFinish: (encoderHandle, descriptorPtr) => {
+            \\        const encoder = getHandle(encoderHandle);
+            \\        if (!encoder) return 0;
+            \\        try {
+            \\            const commandBuffer = encoder.finish();
+            \\            freeHandle(encoderHandle);
+            \\            return registerHandle(commandBuffer);
+            \\        } catch (e) {
+            \\            console.error("wgpuCommandEncoderFinish error:", e);
+            \\            return 0;
+            \\        }
+            \\    },
+            \\
+            \\    wgpuQueueSubmit: (queueHandle, commandCount, commandsPtr) => {
+            \\        if (!gpuDevice) return;
+            \\        try {
+            \\            // Read command buffer handles from WASM memory
+            \\            const view = new DataView(wasmMemory.buffer);
+            \\            const commandBuffers = [];
+            \\            for (let i = 0; i < commandCount; i++) {
+            \\                const handle = view.getUint32(commandsPtr + i * 4, true);
+            \\                const buffer = getHandle(handle);
+            \\                if (buffer) {
+            \\                    commandBuffers.push(buffer);
+            \\                    freeHandle(handle);
+            \\                }
+            \\            }
+            \\            if (commandBuffers.length > 0) {
+            \\                gpuDevice.queue.submit(commandBuffers);
+            \\            }
+            \\        } catch (e) {
+            \\            console.error("wgpuQueueSubmit error:", e);
+            \\        }
+            \\    },
+            \\
+            \\    wgpuQueueWriteBuffer: (queueHandle, bufferHandle, offset, dataPtr, size) => {
+            \\        const buffer = getHandle(bufferHandle);
+            \\        if (!gpuDevice || !buffer) return;
+            \\        try {
+            \\            const data = new Uint8Array(wasmMemory.buffer, dataPtr, Number(size));
+            \\            gpuDevice.queue.writeBuffer(buffer, Number(offset), data);
+            \\        } catch (e) {
+            \\            console.error("wgpuQueueWriteBuffer error:", e);
+            \\        }
+            \\    },
+            \\
+            \\    wgpuDeviceTick: (deviceHandle) => {
+            \\        // No-op: Browser handles device ticking automatically
+            \\    },
+            \\};
             \\
             \\export async function init(wasmPath) {
             \\    if (!navigator.gpu) {
             \\        throw new Error("WebGPU is not supported in this browser");
             \\    }
             \\
-            \\    const adapter = await navigator.gpu.requestAdapter();
-            \\    if (!adapter) {
+            \\    gpuAdapter = await navigator.gpu.requestAdapter();
+            \\    if (!gpuAdapter) {
             \\        throw new Error("Failed to get WebGPU adapter");
             \\    }
             \\
-            \\    const device = await adapter.requestDevice();
+            \\    gpuDevice = await gpuAdapter.requestDevice();
             \\
-            \\    const response = await fetch(wasmPath || "zig_gui_experiment.wasm");
+            \\    // Get canvas and configure WebGPU context
+            \\    canvasElement = document.getElementById("canvas");
+            \\    if (canvasElement) {
+            \\        gpuContext = canvasElement.getContext("webgpu");
+            \\        if (gpuContext) {
+            \\            const format = navigator.gpu.getPreferredCanvasFormat();
+            \\            gpuContext.configure({
+            \\                device: gpuDevice,
+            \\                format: format,
+            \\                alphaMode: "opaque",
+            \\            });
+            \\            console.log("WebGPU context configured with format:", format);
+            \\        }
+            \\    }
+            \\
+            \\    const response = await fetch(wasmPath || "bin/zig_gui_experiment.wasm");
             \\    const wasmBytes = await response.arrayBuffer();
             \\
+            \\    // Combine all stubs into importObject.env
             \\    const importObject = {
             \\        env: {
-            \\            // WebGPU device will be passed to WASM via imports
-            \\            // Memory is exported from WASM, not imported
+            \\            ...emscriptenStubs,
+            \\            ...webgpuStubs,
             \\        },
             \\    };
             \\
             \\    const { instance } = await WebAssembly.instantiate(wasmBytes, importObject);
+            \\    wasmInstance = instance;
+            \\
+            \\    // Get memory export from WASM
+            \\    wasmMemory = instance.exports.memory;
+            \\    if (!wasmMemory) {
+            \\        console.warn("WASM module did not export memory");
+            \\    }
+            \\
+            \\    console.log("WASM module loaded successfully");
+            \\    const exportNames = Object.keys(instance.exports);
+            \\    console.log("Exports:", exportNames.join(", "));
             \\
             \\    return {
             \\        instance,
-            \\        device,
-            \\        adapter,
+            \\        device: gpuDevice,
+            \\        adapter: gpuAdapter,
+            \\        context: gpuContext,
             \\        exports: instance.exports,
             \\    };
             \\}

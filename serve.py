@@ -37,7 +37,8 @@ def main():
     port = int(sys.argv[1]) if len(sys.argv) > 1 else DEFAULT_PORT
 
     # Change to the web build output directory
-    web_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)), "zig-out", "web")
+    # Note: WASM build outputs to zig-out/ with .custom="." install path
+    web_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)), "zig-out")
 
     if not os.path.isdir(web_dir):
         print(f"Error: Web build directory not found: {web_dir}")
