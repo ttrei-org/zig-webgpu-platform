@@ -27,15 +27,48 @@ pub const OffscreenRenderTarget = render_target.OffscreenRenderTarget;
 const log = std.log.scoped(.renderer);
 
 // Dawn native instance - opaque pointer to C++ dawn::native::Instance
-const DawnNativeInstance = ?*opaque {};
-const DawnProcsTable = ?*anyopaque;
+// These types and externs are only available on native (non-WASM) builds.
+// On web, WebGPU is provided by the browser's navigator.gpu API.
+const DawnNativeInstance = if (is_native) ?*opaque {} else void;
+const DawnProcsTable = if (is_native) ?*anyopaque else void;
 
-// External C functions from dawn.cpp and dawn_proc.c
-extern fn dniCreate() DawnNativeInstance;
-extern fn dniDestroy(dni: DawnNativeInstance) void;
-extern fn dniGetWgpuInstance(dni: DawnNativeInstance) ?zgpu.wgpu.Instance;
-extern fn dnGetProcs() DawnProcsTable;
-extern fn dawnProcSetProcs(procs: DawnProcsTable) void;
+// External C functions from dawn.cpp and dawn_proc.c (native only)
+// On WASM builds, these are stubbed out as unreachable since browser provides WebGPU.
+const dniCreate = if (is_native) struct {
+    extern fn dniCreate() DawnNativeInstance;
+}.dniCreate else struct {
+    fn dniCreate() void {
+        unreachable;
+    }
+}.dniCreate;
+
+const dniDestroy = if (is_native) struct {
+    extern fn dniDestroy(dni: DawnNativeInstance) void;
+}.dniDestroy else struct {
+    fn dniDestroy(_: void) void {}
+}.dniDestroy;
+
+const dniGetWgpuInstance = if (is_native) struct {
+    extern fn dniGetWgpuInstance(dni: DawnNativeInstance) ?zgpu.wgpu.Instance;
+}.dniGetWgpuInstance else struct {
+    fn dniGetWgpuInstance(_: void) ?zgpu.wgpu.Instance {
+        unreachable;
+    }
+}.dniGetWgpuInstance;
+
+const dnGetProcs = if (is_native) struct {
+    extern fn dnGetProcs() DawnProcsTable;
+}.dnGetProcs else struct {
+    fn dnGetProcs() void {
+        unreachable;
+    }
+}.dnGetProcs;
+
+const dawnProcSetProcs = if (is_native) struct {
+    extern fn dawnProcSetProcs(procs: DawnProcsTable) void;
+}.dawnProcSetProcs else struct {
+    fn dawnProcSetProcs(_: void) void {}
+}.dawnProcSetProcs;
 
 /// Error type for renderer operations.
 pub const RendererError = error{
@@ -337,7 +370,8 @@ pub const Renderer = struct {
     command_buffer: std.ArrayList(DrawCommand),
 
     /// Dawn native instance - must be kept alive for WebGPU to function.
-    native_instance: DawnNativeInstance,
+    /// Only present on native builds; web builds use browser-provided WebGPU.
+    native_instance: DawnNativeInstance = if (is_native) null else {},
     /// WebGPU instance handle - entry point for the WebGPU API.
     instance: ?zgpu.wgpu.Instance,
     /// WebGPU adapter representing a physical GPU.
@@ -395,11 +429,20 @@ pub const Renderer = struct {
     /// Height of the screenshot resources (for resize detection).
     screenshot_height: u32,
 
-    /// Initialize the renderer with a GLFW window.
+    /// Initialize the renderer with a GLFW window (native desktop only).
     /// Creates a WebGPU instance, surface, adapter (compatible with surface), device,
     /// and swap chain. The surface must be created before the adapter to ensure
     /// the adapter can present to the surface on all platforms (especially X11).
-    pub fn init(allocator: std.mem.Allocator, window: *zglfw.Window, width: u32, height: u32) RendererError!Self {
+    ///
+    /// This function is only available on native builds. For web/WASM builds,
+    /// use initWeb() instead.
+    pub const init = if (is_native) initNativeImpl else struct {
+        fn init(_: std.mem.Allocator, _: *zglfw.Window, _: u32, _: u32) RendererError!Self {
+            @compileError("Renderer.init() is only available on native builds; use initWeb() for WASM");
+        }
+    }.init;
+
+    fn initNativeImpl(allocator: std.mem.Allocator, window: *zglfw.Window, width: u32, height: u32) RendererError!Self {
         log.debug("initializing renderer", .{});
 
         // Initialize Dawn proc table - MUST be called before any WebGPU functions
@@ -573,7 +616,7 @@ pub const Renderer = struct {
         };
     }
 
-    /// Initialize the renderer for headless (offscreen) rendering.
+    /// Initialize the renderer for headless (offscreen) rendering (native only).
     /// Creates a WebGPU instance, adapter (without surface), and device.
     /// No swap chain is created - use createOffscreenRenderTarget() instead.
     ///
@@ -581,7 +624,15 @@ pub const Renderer = struct {
     /// - Automated testing
     /// - Screenshot generation in CI environments
     /// - Server-side rendering
-    pub fn initHeadless(allocator: std.mem.Allocator, width: u32, height: u32) RendererError!Self {
+    ///
+    /// This function is only available on native builds.
+    pub const initHeadless = if (is_native) initHeadlessImpl else struct {
+        fn initHeadless(_: std.mem.Allocator, _: u32, _: u32) RendererError!Self {
+            @compileError("Renderer.initHeadless() is only available on native builds");
+        }
+    }.initHeadless;
+
+    fn initHeadlessImpl(allocator: std.mem.Allocator, width: u32, height: u32) RendererError!Self {
         log.info("initializing headless renderer (no window/surface)", .{});
 
         // Initialize Dawn proc table - MUST be called before any WebGPU functions
@@ -702,6 +753,197 @@ pub const Renderer = struct {
             .surface = null, // No surface in headless mode
             .swapchain = null, // No swap chain in headless mode
             .window = null, // No window in headless mode
+            .swapchain_width = width,
+            .swapchain_height = height,
+            .shader_module = shader_module,
+            .bind_group_layout = bind_group_layout,
+            .pipeline_layout = pipeline_layout,
+            .render_pipeline = render_pipeline,
+            .vertex_buffer = vertex_result.buffer,
+            .vertex_buffer_capacity = vertex_result.capacity,
+            .uniform_buffer = uniform_buffer,
+            .bind_group = bind_group,
+            .screenshot_texture = null,
+            .screenshot_staging_buffer = null,
+            .screenshot_width = 0,
+            .screenshot_height = 0,
+        };
+    }
+
+    /// Initialize the renderer for web/WASM builds using browser WebGPU.
+    ///
+    /// This function is the web counterpart to init() (desktop) and initHeadless().
+    /// It uses browser-provided WebGPU APIs instead of Dawn:
+    /// - Creates a surface from the HTML canvas element
+    /// - Requests adapter and device via browser's navigator.gpu API
+    /// - Creates a swap chain bound to the canvas for presentation
+    ///
+    /// The browser WebGPU context must be available (navigator.gpu must exist).
+    /// On browsers without WebGPU support, this will fail with appropriate errors.
+    ///
+    /// Parameters:
+    /// - allocator: Memory allocator for internal buffers
+    /// - width: Canvas width in pixels
+    /// - height: Canvas height in pixels
+    ///
+    /// Returns:
+    /// - Initialized Renderer for web rendering, or error on failure
+    ///
+    /// Note: This function is only available on WASM builds. On native builds,
+    /// use init() for windowed rendering or initHeadless() for offscreen rendering.
+    pub const initWeb = if (!is_native) initWebImpl else struct {
+        fn initWebImpl(_: std.mem.Allocator, _: u32, _: u32) RendererError!Self {
+            @compileError("initWeb is only available on WASM builds");
+        }
+    }.initWebImpl;
+
+    fn initWebImpl(allocator: std.mem.Allocator, width: u32, height: u32) RendererError!Self {
+        const web = @import("platform/web.zig");
+
+        log.info("initializing web renderer (browser WebGPU)", .{});
+
+        // On web, WebGPU is provided by the browser. We don't need Dawn.
+        // The browser's navigator.gpu API provides the WebGPU implementation.
+
+        // Create WebGPU instance - on web this is obtained from the browser
+        // zgpu provides a platform-agnostic way to create instances
+        const instance = zgpu.wgpu.createInstance(.{
+            .next_in_chain = null,
+        }) orelse {
+            log.err("failed to create WebGPU instance (browser may not support WebGPU)", .{});
+            return RendererError.InstanceCreationFailed;
+        };
+        log.debug("WebGPU instance created from browser", .{});
+
+        // Create surface from the HTML canvas element
+        // The default canvas selector "#canvas" matches Emscripten's default
+        const surface = web.createSurfaceFromCanvas(instance, "#canvas") orelse {
+            log.err("failed to create WebGPU surface from canvas", .{});
+            instance.release();
+            return RendererError.SurfaceCreationFailed;
+        };
+        log.debug("WebGPU surface created from canvas", .{});
+
+        // Request adapter with high-performance preference and compatible surface
+        // On web, this calls navigator.gpu.requestAdapter() via zgpu
+        const adapter = web.requestAdapterSync(instance, surface) orelse {
+            log.err("failed to obtain WebGPU adapter from browser", .{});
+            surface.release();
+            instance.release();
+            return RendererError.AdapterRequestFailed;
+        };
+
+        // Log adapter properties for debugging
+        var props: zgpu.wgpu.AdapterProperties = undefined;
+        props.next_in_chain = null;
+        adapter.getProperties(&props);
+        log.info("WebGPU adapter (web): {s} ({s})", .{ props.name, props.driver_description });
+        log.info("  Backend: {}, Type: {}", .{ props.backend_type, props.adapter_type });
+
+        // Request device with default limits
+        const device = web.requestDeviceSync(adapter) orelse {
+            log.err("failed to obtain WebGPU device from browser", .{});
+            adapter.release();
+            surface.release();
+            instance.release();
+            return RendererError.DeviceRequestFailed;
+        };
+        log.info("WebGPU device obtained (web)", .{});
+
+        // Set up error callback to catch validation errors
+        device.setUncapturedErrorCallback(&deviceErrorCallback, null);
+
+        // Get the command queue from the device
+        const queue = device.getQueue();
+        log.debug("WebGPU queue obtained", .{});
+
+        // Create swap chain for the canvas
+        const swapchain = web.createSwapChain(device, surface, width, height) orelse {
+            log.err("failed to create swap chain for canvas", .{});
+            queue.release();
+            device.release();
+            adapter.release();
+            surface.release();
+            instance.release();
+            return RendererError.SwapChainCreationFailed;
+        };
+        log.info("WebGPU swap chain created: {}x{}", .{ width, height });
+
+        // Create shader module from embedded WGSL source
+        const shader_module = createShaderModule(device) orelse {
+            log.err("failed to create shader module", .{});
+            swapchain.release();
+            queue.release();
+            device.release();
+            adapter.release();
+            surface.release();
+            instance.release();
+            return RendererError.ShaderCompilationFailed;
+        };
+
+        // Create bind group layout for uniform buffer (screen dimensions)
+        const bind_group_layout = createBindGroupLayout(device);
+        log.debug("bind group layout created for uniforms", .{});
+
+        // Create pipeline layout with the bind group layout in slot 0
+        const bind_group_layouts = [_]zgpu.wgpu.BindGroupLayout{bind_group_layout};
+        const pipeline_layout = device.createPipelineLayout(.{
+            .next_in_chain = null,
+            .label = "Web Pipeline Layout",
+            .bind_group_layout_count = bind_group_layouts.len,
+            .bind_group_layouts = &bind_group_layouts,
+        });
+        log.debug("pipeline layout created with bind group layout in slot 0", .{});
+
+        // Create render pipeline for triangle rendering (uses BGRA format like desktop swap chain)
+        const render_pipeline = createRenderPipeline(device, pipeline_layout, shader_module) orelse {
+            log.err("failed to create render pipeline", .{});
+            pipeline_layout.release();
+            shader_module.release();
+            swapchain.release();
+            queue.release();
+            device.release();
+            adapter.release();
+            surface.release();
+            instance.release();
+            return RendererError.PipelineCreationFailed;
+        };
+
+        // Create dynamic vertex buffer
+        const vertex_result = createVertexBuffer(device);
+        log.info("dynamic vertex buffer created: {} vertices capacity ({} bytes)", .{
+            vertex_result.capacity,
+            @as(u64, vertex_result.capacity) * @sizeOf(Vertex),
+        });
+
+        // Create uniform buffer for screen dimensions
+        const uniform_buffer = createUniformBuffer(device);
+        log.info("uniform buffer created for screen dimensions", .{});
+
+        // Initialize uniform buffer with current screen dimensions
+        const initial_uniforms: Uniforms = .{
+            .screen_size = .{ @floatFromInt(width), @floatFromInt(height) },
+        };
+        queue.writeBuffer(uniform_buffer, 0, Uniforms, &.{initial_uniforms});
+        log.info("uniform buffer initialized with screen size: {}x{}", .{ width, height });
+
+        // Create bind group containing the uniform buffer
+        const bind_group = createBindGroup(device, bind_group_layout, uniform_buffer);
+        log.info("bind group created with uniform buffer", .{});
+
+        log.info("web renderer initialization complete", .{});
+
+        return Self{
+            .allocator = allocator,
+            .command_buffer = .empty,
+            // No native_instance on web - browser provides WebGPU
+            .instance = instance,
+            .adapter = adapter,
+            .device = device,
+            .queue = queue,
+            .surface = surface,
+            .swapchain = swapchain,
+            .window = null, // No GLFW window on web
             .swapchain_width = width,
             .swapchain_height = height,
             .shader_module = shader_module,
@@ -2443,10 +2685,13 @@ pub const Renderer = struct {
             self.instance = null;
         }
 
-        // Destroy Dawn native instance (C++ cleanup)
-        if (self.native_instance) |ni| {
-            dniDestroy(ni);
-            self.native_instance = null;
+        // Destroy Dawn native instance (C++ cleanup) - native builds only
+        // On web, there's no Dawn native instance to destroy.
+        if (is_native) {
+            if (self.native_instance) |ni| {
+                dniDestroy(ni);
+                self.native_instance = null;
+            }
         }
 
         log.info("renderer resources released", .{});
