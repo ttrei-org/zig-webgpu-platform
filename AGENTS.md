@@ -4,12 +4,30 @@
 
 Take screenshots during development to verify the output is correct:
 ```bash
+# Native desktop screenshot
 xvfb-run zig build run -- --screenshot=/tmp/screenshot.png
+
+# Web screenshot (requires WebGPU-capable browser)
+./scripts/web_screenshot.sh /tmp/web_screenshot.png
 ```
 
 ---
 
 ## Browser Testing with Playwright
+
+### Web Screenshots
+
+The project includes a script for capturing web screenshots using Playwright:
+```bash
+./scripts/web_screenshot.sh /tmp/web_screenshot.png
+```
+
+For headless environments (CI, SSH sessions):
+```bash
+xvfb-run --auto-servernum ./scripts/web_screenshot.sh /tmp/web_screenshot.png
+```
+
+**Note:** Web screenshots require a WebGPU-capable browser. In environments without GPU acceleration, the screenshot will show an error message. Use a machine with GPU support for visual parity testing between native and web builds.
 
 ### Firefox with WebGPU
 
