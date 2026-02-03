@@ -809,10 +809,12 @@ pub const Renderer = struct {
         // zgpu provides a platform-agnostic way to create instances
         const instance = zgpu.wgpu.createInstance(.{
             .next_in_chain = null,
-        }) orelse {
+        });
+        // Check if instance creation succeeded (null pointer indicates failure)
+        if (@intFromPtr(instance) == 0) {
             log.err("failed to create WebGPU instance (browser may not support WebGPU)", .{});
             return RendererError.InstanceCreationFailed;
-        };
+        }
         log.debug("WebGPU instance created from browser", .{});
 
         // Create surface from the HTML canvas element

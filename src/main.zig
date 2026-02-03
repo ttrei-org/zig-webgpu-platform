@@ -476,6 +476,11 @@ const wasm_exports = if (is_wasm) struct {
     /// Also provides emscripten bindings without libc dependency.
     const web = @import("platform/web.zig");
 
+    /// Render target module for SwapChainRenderTarget.
+    const render_target_mod = @import("render_target.zig");
+    const SwapChainRenderTarget = render_target_mod.SwapChainRenderTarget;
+    const RenderTarget = render_target_mod.RenderTarget;
+
     /// Static storage for global app state.
     /// Using static variables because emscripten_set_main_loop with simulate_infinite_loop=1
     /// doesn't return, so stack-allocated variables would be invalid when the callback runs.
@@ -483,6 +488,12 @@ const wasm_exports = if (is_wasm) struct {
     var static_platform: web.WebPlatform = undefined;
     var static_app: App = undefined;
     var static_app_state: web.GlobalAppState = undefined;
+
+    /// Static storage for renderer and render target.
+    /// These must persist across frames since the main loop callback accesses them.
+    var static_renderer: Renderer = undefined;
+    var static_swap_chain_target: SwapChainRenderTarget = undefined;
+    var static_render_target: RenderTarget = undefined;
 
     /// Main loop callback for web platform.
     /// Called by the browser each frame via emscripten_set_main_loop.
@@ -563,8 +574,10 @@ const wasm_exports = if (is_wasm) struct {
     ///
     /// Initializes:
     /// 1. WebPlatform - for input and canvas management
-    /// 2. App - application state and logic
-    /// 3. GlobalAppState - ties platform, app, and renderer together for callback access
+    /// 2. Renderer - WebGPU rendering context via initWeb()
+    /// 3. SwapChainRenderTarget - render target for the canvas
+    /// 4. App - application state and logic
+    /// 5. GlobalAppState - ties platform, app, renderer, and render target together
     ///
     /// The global state is stored in static variables to survive across callback invocations.
     pub fn wasm_main() callconv(.c) void {
@@ -573,23 +586,51 @@ const wasm_exports = if (is_wasm) struct {
         // Initialize web platform in static storage
         static_platform = web.WebPlatform.init(std.heap.page_allocator);
 
+        // Get canvas dimensions for renderer initialization
+        const fb_size = static_platform.getFramebufferSize();
+        log.info("wasm_main: canvas size {}x{}", .{ fb_size.width, fb_size.height });
+
+        // Initialize WebGPU renderer for web platform.
+        // This creates the WebGPU instance, surface, adapter, device, and swap chain.
+        log.info("wasm_main: initializing WebGPU renderer", .{});
+        static_renderer = Renderer.initWeb(std.heap.page_allocator, fb_size.width, fb_size.height) catch |err| {
+            log.err("wasm_main: failed to initialize renderer: {}", .{err});
+            return;
+        };
+        log.info("wasm_main: WebGPU renderer initialized successfully", .{});
+
+        // Create SwapChainRenderTarget from the renderer's swap chain.
+        // This wraps the swap chain to implement the RenderTarget interface.
+        static_swap_chain_target = static_renderer.createSwapChainRenderTarget();
+        static_render_target = static_swap_chain_target.render_target;
+        // Update context pointer after struct is in final location
+        static_render_target.context = @ptrCast(&static_swap_chain_target);
+        log.info("wasm_main: swap chain render target created", .{});
+
         // Initialize application state in static storage
         static_app = App.init(std.heap.page_allocator);
 
-        // Initialize global app state struct with platform and app pointers.
-        // Renderer and render_target are null initially - will be set when WebGPU is initialized.
+        // Set renderer reference for the app (for screenshot capability)
+        static_app.setRenderer(&static_renderer);
+
+        // Initialize global app state struct with platform, app, renderer, and render target.
+        // All pointers are now valid and ready for the main loop callback.
         static_app_state = .{
             .platform = &static_platform,
             .app = &static_app,
-            .renderer = null, // Set later via web.setGlobalRenderer() when WebGPU is ready
+            .renderer = &static_renderer,
             .last_frame_time = web.emscripten.emscripten_get_now(),
-            .render_target = null, // Set later via web.setGlobalRenderTarget() when WebGPU is ready
+            .render_target = &static_render_target,
         };
 
         // Set the global state pointer for callback access
         web.initGlobalAppState(&static_app_state);
 
-        log.info("wasm_main: platform and app initialized, starting main loop", .{});
+        // Also set global renderer and render target via web module helpers
+        web.setGlobalRenderer(&static_renderer);
+        web.setGlobalRenderTarget(&static_render_target);
+
+        log.info("wasm_main: platform, renderer, and app initialized, starting main loop", .{});
 
         // Start the main loop using emscripten_set_main_loop.
         // Parameters:

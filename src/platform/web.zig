@@ -813,7 +813,7 @@ pub fn createSurfaceFromCanvas(
     // Check if surface creation succeeded.
     // A null/zero pointer indicates the browser failed to create the surface
     // (e.g., WebGPU not supported, canvas not found, or invalid selector).
-    if (@intFromPtr(surface.ptr) == 0) {
+    if (@intFromPtr(surface) == 0) {
         log.err("failed to create WebGPU surface from canvas '{s}'", .{canvas_selector});
         return null;
     }
@@ -884,7 +884,7 @@ pub fn createSwapChain(
 
     // Check if swap chain creation succeeded.
     // A null/zero pointer indicates the browser failed to configure the canvas context.
-    if (@intFromPtr(swap_chain.ptr) == 0) {
+    if (@intFromPtr(swap_chain) == 0) {
         log.err("failed to create swap chain for canvas (device or surface may be invalid)", .{});
         return null;
     }
