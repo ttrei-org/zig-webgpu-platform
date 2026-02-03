@@ -81,28 +81,15 @@
 
             try {
                 // Initialize using the generated JS module
-                // The init() function handles WebGPU setup and WASM loading
-                const { instance, device, adapter, exports } = await init();
+                // The init() function handles WASM loading
+                // WebGPU initialization is handled by the WASM module via wgpu* bindings
+                const { instance, exports } = await init();
 
-                // Configure canvas context for WebGPU
-                const context = canvas.getContext("webgpu");
-                if (!context) {
-                    showError("Failed to get WebGPU context from canvas.");
-                    return;
-                }
-
-                const format = navigator.gpu.getPreferredCanvasFormat();
-                context.configure({
-                    device: device,
-                    format: format,
-                    alphaMode: "opaque"
-                });
-
-                console.log("WebGPU initialized successfully");
+                console.log("WASM module loaded");
                 console.log("Canvas size:", canvas.width, "x", canvas.height);
-                console.log("Preferred format:", format);
 
                 // Call the WASM entry point
+                // wasm_main initializes WebGPU, creates the renderer, and starts the main loop
                 if (exports.wasm_main) {
                     console.log("Calling wasm_main...");
                     exports.wasm_main();
