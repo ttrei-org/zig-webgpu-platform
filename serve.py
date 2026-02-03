@@ -47,7 +47,7 @@ def main():
     os.chdir(web_dir)
 
     handler = partial(WebGPURequestHandler, directory=".")
-    server = http.server.HTTPServer(("localhost", port), handler)
+    server = http.server.HTTPServer(("0.0.0.0", port), handler)
 
     print(f"Serving web build from: {web_dir}")
     print(f"Open http://localhost:{port} in your browser")
