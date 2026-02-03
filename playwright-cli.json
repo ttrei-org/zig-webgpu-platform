@@ -1,0 +1,11 @@
+{
+  "browser": {
+    "browserName": "firefox",
+    "launchOptions": {
+      "headless": false,
+      "firefoxUserPrefs": {
+        "dom.webgpu.enabled": true
+      }
+    }
+  }
+}

@@ -9,6 +9,48 @@ xvfb-run zig build run -- --screenshot=/tmp/screenshot.png
 
 ---
 
+## Browser Testing with Playwright
+
+### Firefox with WebGPU
+
+Playwright's bundled Firefox doesn't enable WebGPU by default. Use a config file to enable it:
+
+**playwright-cli.json:**
+```json
+{
+  "browser": {
+    "browserName": "firefox",
+    "launchOptions": {
+      "headless": false,
+      "firefoxUserPrefs": {
+        "dom.webgpu.enabled": true
+      }
+    }
+  }
+}
+```
+
+**Running the WebGPU app:**
+```bash
+# Start the web server
+python serve.py &
+
+# Run Firefox with WebGPU enabled (requires xvfb for headless environments)
+xvfb-run --auto-servernum bash -c '
+  playwright-cli config --config=playwright-cli.json
+  playwright-cli open http://localhost:8000/
+  playwright-cli screenshot
+  playwright-cli console
+'
+```
+
+**Key points:**
+- `firefoxUserPrefs` passes preferences to Firefox (equivalent to `-pref` command line args)
+- `xvfb-run` provides a virtual display for headed mode in headless environments
+- Run all playwright-cli commands in the same xvfb-run session to maintain the browser instance
+
+---
+
 ## Zig Development
 
 Always use `zigdoc` to discover APIs for the Zig standard library and any third-party dependencies.
