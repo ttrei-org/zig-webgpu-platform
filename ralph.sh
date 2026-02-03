@@ -10,5 +10,5 @@ while true; do
   fi
   logfile="/var/tmp/ralph-log/run-$(date +%Y%m%d-%H%M%S).log"
   echo "=== $count issue(s) ready, logging to $logfile ==="
-  cat /var/tmp/prompt.txt | opencode run --model anthropic/claude-opus-4-5-20251101 > "$logfile" 2>&1
+  cat prompts/keep-it-going.txt | opencode run --model anthropic/claude-opus-4-5-20251101 > "$logfile" 2>&1
 done
