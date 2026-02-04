@@ -7,7 +7,7 @@ Take screenshots during development to verify the output is correct:
 # Native desktop screenshot
 xvfb-run zig build run -- --screenshot=/tmp/screenshot.png
 
-# Web screenshot (requires WebGPU-capable browser)
+# Web screenshot (uses xvfb + Firefox internally)
 ./scripts/web_screenshot.sh /tmp/web_screenshot.png
 ```
 
@@ -17,73 +17,21 @@ xvfb-run zig build run -- --screenshot=/tmp/screenshot.png
 
 ### Web Screenshots
 
-The project includes a script for capturing web screenshots using Playwright:
+The project includes a script for capturing web screenshots using Playwright with Firefox and xvfb. It handles everything internally (virtual display, browser config, web server lifecycle):
 ```bash
 ./scripts/web_screenshot.sh /tmp/web_screenshot.png
 ```
 
-For headless environments (CI, SSH sessions):
+An optional second argument controls the wait time (seconds) before capturing, to allow WebGPU initialization:
 ```bash
-xvfb-run --auto-servernum ./scripts/web_screenshot.sh /tmp/web_screenshot.png
-```
-
-**Note:** The `web_screenshot.sh` script uses Chromium, which requires real GPU hardware for WebGPU. In headless/CI environments without GPU, it fails with "Failed to get WebGPU adapter". For WebGPU rendering without GPU acceleration, use Firefox with WebGPU enabled instead (see below).
-
-### Firefox with WebGPU
-
-Playwright's bundled Firefox doesn't enable WebGPU by default. Use a config file to enable it:
-
-**playwright-cli.json:**
-```json
-{
-  "browser": {
-    "browserName": "firefox",
-    "launchOptions": {
-      "headless": false,
-      "firefoxUserPrefs": {
-        "dom.webgpu.enabled": true
-      }
-    }
-  }
-}
-```
-
-**Running the WebGPU app:**
-```bash
-# Start the web server
-python serve.py &
-
-# Run Firefox with WebGPU enabled (requires xvfb for headless environments)
-xvfb-run --auto-servernum bash -c '
-  playwright-cli config --config=playwright-cli.json
-  playwright-cli open http://localhost:8000/
-  playwright-cli screenshot
-  playwright-cli console
-'
-```
-
-**Taking a screenshot that saves to a file:**
-```bash
-python serve.py > /dev/null 2>&1 &
-SERVER_PID=$!
-sleep 2
-
-xvfb-run --auto-servernum bash << 'SCRIPT'
-playwright-cli config --config=playwright-cli.json
-playwright-cli open "http://localhost:8000/"
-sleep 5
-playwright-cli run-code 'async page => { await page.screenshot({ path: "/tmp/web_firefox.png", type: "png" }); return "saved"; }'
-playwright-cli session-stop
-SCRIPT
-
-kill $SERVER_PID 2>/dev/null
+./scripts/web_screenshot.sh /tmp/web_screenshot.png 8
 ```
 
 **Key points:**
-- `firefoxUserPrefs` passes preferences to Firefox (equivalent to `-pref` command line args)
-- `xvfb-run` provides a virtual display for headed mode in headless environments
-- Run all playwright-cli commands in the same xvfb-run session to maintain the browser instance
-- `playwright-cli screenshot` doesn't save to a file path — use `run-code` with `page.screenshot()` instead
+- The script uses Firefox with `dom.webgpu.enabled` set via `firefoxUserPrefs`, so it works without GPU hardware
+- `xvfb-run` is invoked internally — no need to wrap the script with it
+- The web server (`serve.py`) is started and stopped automatically
+- Uses `playwright-cli run-code` with `page.screenshot()` to save to a file path
 
 ---
 
