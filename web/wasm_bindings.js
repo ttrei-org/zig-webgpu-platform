@@ -1426,6 +1426,10 @@ const webgpuStubs = {
     wgpuBindGroupLayoutRelease: (handle) => { freeHandle(handle); },
     wgpuSurfaceRelease: (handle) => { freeHandle(handle); },
     wgpuTextureViewRelease: (handle) => { freeHandle(handle); },
+    wgpuRenderPipelineRelease: (handle) => { freeHandle(handle); },
+    wgpuBufferRelease: (handle) => { freeHandle(handle); },
+    wgpuBindGroupRelease: (handle) => { freeHandle(handle); },
+    wgpuTextureRelease: (handle) => { freeHandle(handle); },
 };
 
 // =============================================================================
