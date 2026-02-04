@@ -3,3 +3,4 @@ zig-out/
 
 *.png
 .playwright-cli/
+certs/
