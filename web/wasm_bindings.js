@@ -674,44 +674,106 @@ const webgpuStubs = {
 
         const entries = [];
         
-        // BindGroupLayoutEntry size is large due to nested structs
-        // We need to parse each entry carefully
-        // Simplified: just parse binding and visibility for uniform buffer case
-        const ENTRY_SIZE = 80; // Approximate, may vary
+        // BindGroupLayoutEntry layout on wasm32 (80 bytes, align 8):
+        //   offset  0: next_in_chain (ptr, 4)
+        //   offset  4: binding (u32, 4)
+        //   offset  8: visibility (ShaderStage packed u32, 4)
+        //   offset 12: [padding 4 bytes for align(8)]
+        //   --- buffer: BufferBindingLayout (24 bytes, align 8) ---
+        //   offset 16: buffer.next_in_chain (ptr, 4)
+        //   offset 20: buffer.binding_type (u32 enum: 0=undef, 1=uniform, 2=storage, 3=read_only_storage)
+        //   offset 24: buffer.has_dynamic_offset (U32Bool: 0=false, 1=true)
+        //   offset 28: [padding 4 bytes for u64]
+        //   offset 32: buffer.min_binding_size (u64)
+        //   --- sampler: SamplerBindingLayout (8 bytes) ---
+        //   offset 40: sampler.next_in_chain (ptr, 4)
+        //   offset 44: sampler.binding_type (u32 enum: 0=undef, 1=filtering, 2=non_filtering, 3=comparison)
+        //   --- texture: TextureBindingLayout (16 bytes) ---
+        //   offset 48: texture.next_in_chain (ptr, 4)
+        //   offset 52: texture.sample_type (u32 enum)
+        //   offset 56: texture.view_dimension (u32 enum)
+        //   offset 60: texture.multisampled (bool, 1 byte + 3 pad)
+        //   --- storage_texture: StorageTextureBindingLayout (16 bytes) ---
+        //   offset 64: storage_texture.next_in_chain (ptr, 4)
+        //   offset 68: storage_texture.access (u32 enum)
+        //   offset 72: storage_texture.format (u32 enum)
+        //   offset 76: storage_texture.view_dimension (u32 enum)
+        const ENTRY_SIZE = 80;
+
+        const BUFFER_BINDING_TYPE_MAP = { 1: "uniform", 2: "storage", 3: "read-only-storage" };
+        const SAMPLER_BINDING_TYPE_MAP = { 1: "filtering", 2: "non-filtering", 3: "comparison" };
+        const TEXTURE_SAMPLE_TYPE_MAP = { 1: "float", 2: "unfilterable-float", 3: "depth", 4: "sint", 5: "uint" };
+        const TEXTURE_VIEW_DIM_MAP = { 1: "1d", 2: "2d", 3: "2d-array", 4: "cube", 5: "cube-array", 6: "3d" };
+        const STORAGE_ACCESS_MAP = { 1: "write-only", 2: "read-only", 3: "read-write" };
 
         for (let i = 0; i < entryCount; i++) {
             const entryPtr = entriesPtr + i * ENTRY_SIZE;
             
-            // offset 0: next_in_chain
-            // offset 4: binding (u32)
-            // offset 8: visibility (u32 flags)
-            // offset 12: buffer layout starts
-            
             const binding = readU32(entryPtr + 4);
             const visibility = readU32(entryPtr + 8);
-            
-            // Buffer binding layout at offset 12:
-            // offset 12: buffer.next_in_chain
-            // offset 16: buffer.binding_type (u32)
-            const bufferBindingType = readU32(entryPtr + 16);
 
             const entry = {
                 binding: binding,
                 visibility: visibility,
             };
 
-            // If buffer binding type is not undefined (0), add buffer binding
+            // Parse buffer binding (offset 20 = binding_type within the entry)
+            const bufferBindingType = readU32(entryPtr + 20);
             if (bufferBindingType !== 0) {
                 entry.buffer = {
-                    type: bufferBindingType === 1 ? "uniform" : "storage",
+                    type: BUFFER_BINDING_TYPE_MAP[bufferBindingType] || "uniform",
+                    hasDynamicOffset: readU32(entryPtr + 24) !== 0,
+                    minBindingSize: Number(readU64(entryPtr + 32)),
                 };
             }
+
+            // Parse sampler binding (offset 44 = sampler.binding_type)
+            const samplerBindingType = readU32(entryPtr + 44);
+            if (samplerBindingType !== 0) {
+                entry.sampler = {
+                    type: SAMPLER_BINDING_TYPE_MAP[samplerBindingType] || "filtering",
+                };
+            }
+
+            // Parse texture binding (offset 52 = texture.sample_type)
+            const textureSampleType = readU32(entryPtr + 52);
+            if (textureSampleType !== 0) {
+                const viewDim = readU32(entryPtr + 56);
+                entry.texture = {
+                    sampleType: TEXTURE_SAMPLE_TYPE_MAP[textureSampleType] || "float",
+                    viewDimension: TEXTURE_VIEW_DIM_MAP[viewDim] || "2d",
+                    multisampled: (new Uint8Array(wasmMemory.buffer))[entryPtr + 60] !== 0,
+                };
+            }
+
+            // Parse storage texture binding (offset 68 = storage_texture.access)
+            const storageAccess = readU32(entryPtr + 68);
+            if (storageAccess !== 0) {
+                const storageFmt = readU32(entryPtr + 72);
+                const storageViewDim = readU32(entryPtr + 76);
+                entry.storageTexture = {
+                    access: STORAGE_ACCESS_MAP[storageAccess] || "write-only",
+                    format: textureFormatToJS(storageFmt) || "rgba8unorm",
+                    viewDimension: TEXTURE_VIEW_DIM_MAP[storageViewDim] || "2d",
+                };
+            }
+
+            console.log("BindGroupLayout entry[" + i + "]: binding=" + binding +
+                " visibility=0x" + visibility.toString(16) +
+                (entry.buffer ? " buffer=" + entry.buffer.type : "") +
+                (entry.sampler ? " sampler=" + entry.sampler.type : "") +
+                (entry.texture ? " texture=" + entry.texture.sampleType : "") +
+                (entry.storageTexture ? " storage=" + entry.storageTexture.access : ""));
 
             entries.push(entry);
         }
 
         try {
+            deviceObj.device.pushErrorScope("validation");
             const layout = deviceObj.device.createBindGroupLayout({ entries });
+            deviceObj.device.popErrorScope().then(err => {
+                if (err) console.error("BindGroupLayout validation error: " + err.message);
+            });
             return registerHandle({ type: "bindGroupLayout", layout: layout });
         } catch (e) {
             console.error("Bind group layout creation failed:", e);
@@ -741,9 +803,14 @@ const webgpuStubs = {
             }
         }
 
+        console.log("Creating pipeline layout with " + layoutCount + " bind group layout(s)");
         try {
+            deviceObj.device.pushErrorScope("validation");
             const pipelineLayout = deviceObj.device.createPipelineLayout({
                 bindGroupLayouts: bindGroupLayouts,
+            });
+            deviceObj.device.popErrorScope().then(err => {
+                if (err) console.error("PipelineLayout validation error: " + err.message);
             });
             return registerHandle({ type: "pipelineLayout", layout: pipelineLayout });
         } catch (e) {
