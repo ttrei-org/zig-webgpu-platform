@@ -1,8 +1,56 @@
-//! Canvas module - Shape drawing abstraction over the Renderer
+//! Canvas module - 2D shape drawing API
 //!
-//! Provides a higher-level drawing API that wraps the Renderer's triangle-based
-//! primitives. Instead of manually decomposing shapes into triangles, callers
-//! use semantic shape methods like fillRect() and fillTriangle().
+//! Provides a high-level, immediate-mode drawing API that wraps the Renderer's
+//! triangle-based primitives. Instead of manually decomposing shapes into
+//! triangles, callers use semantic shape methods like `fillRect()` and
+//! `fillCircle()`.
+//!
+//! ## Coordinate System
+//!
+//! All coordinates are in **logical units** defined by the `Viewport`:
+//! - **Origin**: top-left corner (0, 0)
+//! - **X axis**: increases to the right
+//! - **Y axis**: increases downward
+//! - **Units**: logical pixels (e.g. 400x300), not physical pixels
+//!
+//! The GPU shader automatically scales logical coordinates to whatever physical
+//! resolution the render target provides. This means drawing code is
+//! resolution-independent — the same code renders correctly at 800x600, 1920x1080,
+//! or any other size.
+//!
+//! ## Usage Pattern
+//!
+//! ```
+//! // In your App.render() callback:
+//! pub fn render(canvas: *Canvas) void {
+//!     // Sky background
+//!     canvas.fillRect(0, 0, 400, 200, Color.fromHex(0x87CEEB));
+//!     // Sun
+//!     canvas.fillCircle(350, 50, 30, Color.yellow, 32);
+//!     // Ground
+//!     canvas.fillRect(0, 200, 400, 100, Color.green);
+//!     // House
+//!     canvas.fillRect(150, 140, 100, 60, Color.fromRgb8(180, 160, 140));
+//!     canvas.fillTriangle(
+//!         .{ .{ 140, 140 }, .{ 200, 100 }, .{ 260, 140 } },
+//!         .{ Color.fromHex(0x8B6914), Color.fromHex(0x8B6914), Color.fromHex(0x8B6914) },
+//!     );
+//! }
+//! ```
+//!
+//! ## Available Primitives
+//!
+//! | Method          | Description                              | Triangles   |
+//! |-----------------|------------------------------------------|-------------|
+//! | fillTriangle    | Single filled triangle, per-vertex color | 1           |
+//! | fillRect        | Solid filled rectangle                   | 2           |
+//! | fillRectGradient| Rectangle with per-corner color gradient | 2           |
+//! | fillCircle      | Filled circle (triangle fan)             | segments    |
+//! | fillPolygon     | Filled convex polygon (fan triangulation)| N-2         |
+//! | strokeRect      | Outlined rectangle (inset stroke)        | 8           |
+//! | strokeCircle    | Outlined circle (ring of quads)          | segments*2  |
+//! | drawLine        | Thick line segment                       | 2           |
+//! | drawPolyline    | Connected line segments                  | (N-1)*2     |
 
 const std = @import("std");
 const renderer_mod = @import("renderer.zig");
@@ -31,25 +79,39 @@ pub const Canvas = struct {
     viewport: Viewport,
 
     /// Create a Canvas wrapping an existing Renderer with a logical viewport.
+    ///
+    /// The viewport defines the logical coordinate space for all drawing operations.
+    /// All shapes drawn through this Canvas use the viewport's coordinate system,
+    /// regardless of the physical render target resolution.
+    ///
+    /// Typically created once per frame in the render loop:
+    /// ```
+    /// var canvas = Canvas.init(&renderer, .{ .logical_width = 400.0, .logical_height = 300.0 });
+    /// ```
     pub fn init(renderer: *Renderer, viewport: Viewport) Canvas {
         return .{ .renderer = renderer, .viewport = viewport };
     }
 
     /// Draw a filled triangle with per-vertex colors.
     ///
-    /// Delegates directly to renderer.queueTriangle(). This is provided
-    /// so callers can use Canvas as their sole drawing interface.
+    /// The GPU interpolates colors smoothly across the triangle surface.
+    /// This is the lowest-level primitive — all other shapes decompose into triangles.
+    ///
+    /// Parameters:
+    /// - positions: Three [x, y] vertices in logical coordinates.
+    /// - colors: Per-vertex colors (interpolated by the GPU).
     pub fn fillTriangle(self: Canvas, positions: [3][2]f32, colors: [3]Color) void {
         self.renderer.queueTriangle(positions, colors);
     }
 
     /// Draw a filled axis-aligned rectangle with a single solid color.
     ///
-    /// Decomposes into 2 triangles:
-    /// - Upper-left:  (x,y) - (x+w,y) - (x,y+h)
-    /// - Lower-right: (x+w,y) - (x+w,y+h) - (x,y+h)
+    /// Decomposes into 2 triangles sharing the diagonal edge.
     ///
-    /// Coordinates are in screen space (origin top-left, X right, Y down).
+    /// Parameters:
+    /// - x, y: Top-left corner position in logical coordinates.
+    /// - w, h: Width and height in logical units.
+    /// - color: Fill color applied uniformly.
     pub fn fillRect(self: Canvas, x: f32, y: f32, w: f32, h: f32, color: Color) void {
         self.fillRectGradient(x, y, w, h, color, color, color, color);
     }
@@ -90,9 +152,16 @@ pub const Canvas = struct {
     /// Draw a filled circle as a triangle fan from the center.
     ///
     /// The circle is approximated by `segments` triangles radiating from
-    /// the center point. More segments produce a smoother circle.
+    /// the center point. More segments produce a smoother circle:
+    /// - 16 segments: visible facets, fast
+    /// - 32 segments: smooth for small/medium circles (recommended default)
+    /// - 64 segments: very smooth for large circles
     ///
-    /// Coordinates are in screen space (origin top-left, X right, Y down).
+    /// Parameters:
+    /// - cx, cy: Center position in logical coordinates.
+    /// - radius: Circle radius in logical units.
+    /// - color: Fill color.
+    /// - segments: Number of triangles (minimum 3). Higher = smoother.
     pub fn fillCircle(self: Canvas, cx: f32, cy: f32, radius: f32, color: Color, segments: u16) void {
         if (segments < 3) return;
         const seg_f: f32 = @floatFromInt(segments);
@@ -158,7 +227,12 @@ pub const Canvas = struct {
     /// along the direction from (x1,y1) to (x2,y2). Returns immediately
     /// for degenerate (near-zero-length) lines.
     ///
-    /// Coordinates are in screen space (origin top-left, X right, Y down).
+    /// Parameters:
+    /// - x1, y1: Start point in logical coordinates.
+    /// - x2, y2: End point in logical coordinates.
+    /// - thickness: Line width in logical units. The line extends thickness/2
+    ///   on each side of the center line.
+    /// - color: Line color.
     pub fn drawLine(self: Canvas, x1: f32, y1: f32, x2: f32, y2: f32, thickness: f32, color: Color) void {
         const dx = x2 - x1;
         const dy = y2 - y1;
@@ -236,11 +310,14 @@ pub const Canvas = struct {
 
     /// Draw a filled convex polygon using fan triangulation from the first vertex.
     ///
-    /// Only correct for convex polygons. For concave shapes the result
+    /// Only correct for **convex** polygons. For concave shapes the result
     /// will have visual artifacts. Degenerate polygons (< 3 points) are
-    /// silently ignored.
+    /// silently ignored. Produces N-2 triangles for N vertices.
     ///
-    /// Coordinates are in screen space (origin top-left, X right, Y down).
+    /// Parameters:
+    /// - points: Slice of [x, y] vertex positions in logical coordinates (min 3).
+    ///   Vertices should be ordered consistently (clockwise or counter-clockwise).
+    /// - color: Uniform fill color.
     pub fn fillPolygon(self: Canvas, points: []const [2]f32, color: Color) void {
         if (points.len < 3) return;
         // Fan triangulation: anchor at points[0], sweep remaining edges
