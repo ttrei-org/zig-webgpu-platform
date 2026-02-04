@@ -10,14 +10,28 @@ const renderer_mod = @import("renderer.zig");
 pub const Renderer = renderer_mod.Renderer;
 pub const Color = renderer_mod.Color;
 
+/// Defines a logical coordinate space for drawing, decoupling App drawing
+/// code from physical pixel dimensions. The shader transforms logical
+/// coordinates to NDC using these dimensions, so shapes scale automatically
+/// to fill whatever physical resolution the render target provides.
+pub const Viewport = struct {
+    /// Logical width of the drawing area (e.g. 400.0).
+    logical_width: f32,
+    /// Logical height of the drawing area (e.g. 300.0).
+    logical_height: f32,
+};
+
 /// Canvas provides shape-drawing methods that decompose into triangles
 /// and delegate to the underlying Renderer.
 pub const Canvas = struct {
     renderer: *Renderer,
+    /// The logical coordinate space used for drawing.
+    /// App code should reference viewport dimensions instead of hardcoding pixel values.
+    viewport: Viewport,
 
-    /// Create a Canvas wrapping an existing Renderer.
-    pub fn init(renderer: *Renderer) Canvas {
-        return .{ .renderer = renderer };
+    /// Create a Canvas wrapping an existing Renderer with a logical viewport.
+    pub fn init(renderer: *Renderer, viewport: Viewport) Canvas {
+        return .{ .renderer = renderer, .viewport = viewport };
     }
 
     /// Draw a filled triangle with per-vertex colors.
@@ -144,12 +158,19 @@ pub const Canvas = struct {
 // --- Tests ---
 
 test "Canvas struct layout" {
-    // Verify the Canvas struct has the expected field and can be initialized.
+    // Verify the Canvas struct has the expected fields and can be initialized.
     // Actual rendering requires a GPU, so we only test the struct shape.
     const canvas_info = @typeInfo(Canvas);
     const fields = canvas_info.@"struct".fields;
-    try std.testing.expectEqual(@as(usize, 1), fields.len);
+    try std.testing.expectEqual(@as(usize, 2), fields.len);
     try std.testing.expectEqualStrings("renderer", fields[0].name);
+    try std.testing.expectEqualStrings("viewport", fields[1].name);
+}
+
+test "Viewport struct layout" {
+    const vp: Viewport = .{ .logical_width = 400.0, .logical_height = 300.0 };
+    try std.testing.expectEqual(@as(f32, 400.0), vp.logical_width);
+    try std.testing.expectEqual(@as(f32, 300.0), vp.logical_height);
 }
 
 test "fillRect produces correct triangle decomposition" {

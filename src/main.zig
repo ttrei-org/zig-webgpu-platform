@@ -37,6 +37,12 @@ const OffscreenRenderTarget = renderer_mod.OffscreenRenderTarget;
 
 const canvas_mod = @import("canvas.zig");
 const Canvas = canvas_mod.Canvas;
+const Viewport = canvas_mod.Viewport;
+
+/// Logical viewport dimensions for the application's drawing coordinate space.
+/// All drawing code uses this fixed coordinate space; the GPU scales it to
+/// whatever physical resolution the render target provides.
+const VIEWPORT: Viewport = .{ .logical_width = 400.0, .logical_height = 300.0 };
 
 const log = std.log.scoped(.main);
 
@@ -373,8 +379,12 @@ fn runWindowedImpl(config: Config) void {
             continue;
         };
 
+        // Set logical viewport dimensions so the shader maps logical coords to NDC.
+        // This decouples drawing code from physical resolution.
+        renderer.setLogicalSize(VIEWPORT.logical_width, VIEWPORT.logical_height);
+
         const render_pass = Renderer.beginRenderPass(frame_state, Renderer.cornflower_blue);
-        var canvas = Canvas.init(&renderer);
+        var canvas = Canvas.init(&renderer, VIEWPORT);
         app.render(&canvas);
         renderer.flushBatch(render_pass);
         Renderer.endRenderPass(render_pass);
@@ -446,8 +456,11 @@ fn runHeadless(config: Config) void {
             return;
         };
 
+        // Set logical viewport dimensions so the shader maps logical coords to NDC.
+        renderer.setLogicalSize(VIEWPORT.logical_width, VIEWPORT.logical_height);
+
         const render_pass = Renderer.beginRenderPass(frame_state, Renderer.cornflower_blue);
-        var canvas = Canvas.init(&renderer);
+        var canvas = Canvas.init(&renderer, VIEWPORT);
         app.render(&canvas);
         renderer.flushBatch(render_pass);
         Renderer.endRenderPass(render_pass);
@@ -555,9 +568,12 @@ const wasm_exports = if (is_wasm) struct {
                     return;
                 };
 
+                // Set logical viewport dimensions so the shader maps logical coords to NDC.
+                renderer.setLogicalSize(VIEWPORT.logical_width, VIEWPORT.logical_height);
+
                 // Render: clear, draw app content, flush batch
                 const render_pass = Renderer.beginRenderPass(frame_state, Renderer.cornflower_blue);
-                var canvas = Canvas.init(renderer);
+                var canvas = Canvas.init(renderer, VIEWPORT);
                 state.app.render(&canvas);
                 renderer.flushBatch(render_pass);
                 Renderer.endRenderPass(render_pass);

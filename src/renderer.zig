@@ -969,6 +969,18 @@ pub const Renderer = struct {
         };
     }
 
+    /// Set the uniform buffer to use logical (viewport) dimensions for the NDC transform.
+    /// Call this after beginFrame() and before rendering to make the shader map logical
+    /// coordinates to NDC, so drawing code can use a fixed coordinate space that scales
+    /// to any physical resolution.
+    pub fn setLogicalSize(self: *Self, logical_width: f32, logical_height: f32) void {
+        const uniforms: Uniforms = .{
+            .screen_size = .{ logical_width, logical_height },
+        };
+        self.queue.writeBuffer(self.uniform_buffer, 0, Uniforms, &.{uniforms});
+        log.debug("uniform buffer set to logical size: {d:.0}x{d:.0}", .{ logical_width, logical_height });
+    }
+
     /// Cornflower blue - a pleasant default clear color (RGB: 0.39, 0.58, 0.93).
     pub const cornflower_blue: zgpu.wgpu.Color = .{ .r = 0.39, .g = 0.58, .b = 0.93, .a = 1.0 };
 

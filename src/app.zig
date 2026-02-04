@@ -250,10 +250,12 @@ pub const App = struct {
         // Creates a radial "starburst" pattern with triangles emanating from center,
         // plus corner accent triangles. Showcases Color constants and helpers.
         //
-        // Window is 400x300. Center at (200, 150).
+        // Uses viewport dimensions so the scene scales to any physical resolution.
 
-        const center_x: f32 = 200.0;
-        const center_y: f32 = 150.0;
+        const vp_w = canvas.viewport.logical_width;
+        const vp_h = canvas.viewport.logical_height;
+        const center_x: f32 = vp_w / 2.0;
+        const center_y: f32 = vp_h / 2.0;
 
         // Radial triangles forming a starburst pattern around the center.
         // Each triangle has its apex at the center and base on an outer arc.
@@ -341,9 +343,9 @@ pub const App = struct {
         // Top-right: Cyan tones using Color constant and rgb() helper
         canvas.fillTriangle(
             .{
-                .{ 350.0, 50.0 },
-                .{ 390.0, 50.0 },
-                .{ 370.0, 10.0 },
+                .{ vp_w - 50.0, 50.0 },
+                .{ vp_w - 10.0, 50.0 },
+                .{ vp_w - 30.0, 10.0 },
             },
             .{
                 Color.cyan,
@@ -355,9 +357,9 @@ pub const App = struct {
         // Bottom-left: Magenta tones using Color constant and fromHex() helper
         canvas.fillTriangle(
             .{
-                .{ 10.0, 250.0 },
-                .{ 50.0, 250.0 },
-                .{ 30.0, 290.0 },
+                .{ 10.0, vp_h - 50.0 },
+                .{ 50.0, vp_h - 50.0 },
+                .{ 30.0, vp_h - 10.0 },
             },
             .{
                 Color.magenta,
@@ -369,9 +371,9 @@ pub const App = struct {
         // Bottom-right: Grayscale using rgb() for precise control
         canvas.fillTriangle(
             .{
-                .{ 350.0, 250.0 },
-                .{ 390.0, 250.0 },
-                .{ 370.0, 290.0 },
+                .{ vp_w - 50.0, vp_h - 50.0 },
+                .{ vp_w - 10.0, vp_h - 50.0 },
+                .{ vp_w - 30.0, vp_h - 10.0 },
             },
             .{
                 Color.white,
@@ -382,9 +384,9 @@ pub const App = struct {
 
         // Position test triangles - verify screen coordinate system works at boundaries.
         // These small markers at exact screen positions confirm coordinate transform is correct.
-        // Window dimensions: 400x300. Valid pixel range: x=[0,399], y=[0,299].
-        const width: f32 = 400.0;
-        const height: f32 = 300.0;
+        // Uses viewport dimensions for resolution independence.
+        const width: f32 = vp_w;
+        const height: f32 = vp_h;
         const marker_size: f32 = 12.0;
 
         // Corner markers: small triangles pointing into each corner.
