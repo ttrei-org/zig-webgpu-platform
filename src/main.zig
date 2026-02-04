@@ -46,6 +46,28 @@ const VIEWPORT: Viewport = .{ .logical_width = 400.0, .logical_height = 300.0 };
 
 const log = std.log.scoped(.main);
 
+/// Convert mouse coordinates from physical window/canvas space to logical viewport space.
+///
+/// All backends report mouse position in physical pixels (window pixels for desktop,
+/// backing buffer pixels for web, configured dimensions for headless). The Canvas
+/// draws in logical viewport coordinates (e.g. 400x300). This function bridges the gap
+/// so the app always receives coordinates in the same space it draws in.
+///
+/// Returns the original coordinates unchanged if window dimensions are zero
+/// (e.g. window minimized) to avoid division by zero.
+fn toLogicalCoordinates(mouse: platform_mod.MouseState, window_size: platform_mod.Size) platform_mod.MouseState {
+    const win_w: f32 = @floatFromInt(window_size.width);
+    const win_h: f32 = @floatFromInt(window_size.height);
+
+    // Guard against division by zero (minimized window or uninitialized state)
+    if (win_w <= 0 or win_h <= 0) return mouse;
+
+    var result = mouse;
+    result.x = mouse.x * (VIEWPORT.logical_width / win_w);
+    result.y = mouse.y * (VIEWPORT.logical_height / win_h);
+    return result;
+}
+
 /// Hook called between endRenderPass and endFrame, receiving the command encoder.
 /// Used by headless mode to copy the rendered texture to a staging buffer
 /// before the command buffer is submitted.
@@ -406,7 +428,11 @@ fn runWindowedImpl(config: Config) void {
             continue;
         }
 
-        const mouse_state = plat.getMouseState();
+        // Convert mouse from window-pixel space to logical viewport space.
+        // GLFW reports cursor position in window coordinates (not framebuffer pixels),
+        // so we use getWindowSize() for the conversion denominator.
+        const raw_mouse = plat.getMouseState();
+        const mouse_state = toLogicalCoordinates(raw_mouse, plat.getWindowSize());
         app.update(delta_time, mouse_state);
 
         // Check if render target needs resize
@@ -484,7 +510,9 @@ fn runHeadless(config: Config) void {
         // Use synthetic delta time (60 FPS simulation)
         const delta_time: f32 = 1.0 / 60.0;
 
-        const mouse_state = plat.getMouseState();
+        // Convert mouse from physical pixel space to logical viewport space.
+        const raw_mouse = plat.getMouseState();
+        const mouse_state = toLogicalCoordinates(raw_mouse, plat.getWindowSize());
         app.update(delta_time, mouse_state);
 
         // Use pre-submit hook to copy rendered texture to staging buffer
@@ -571,8 +599,9 @@ const wasm_exports = if (is_wasm) struct {
         // Poll for events (updates frame counter and processes browser events)
         state.platform.pollEvents();
 
-        // Get mouse state from platform
-        const mouse_state = state.platform.getMouseState();
+        // Convert mouse from canvas-pixel space to logical viewport space.
+        const raw_mouse = state.platform.getMouseState();
+        const mouse_state = toLogicalCoordinates(raw_mouse, state.platform.getWindowSize());
 
         // Update application state
         state.app.update(delta_time, mouse_state);
