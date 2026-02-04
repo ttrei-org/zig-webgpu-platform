@@ -442,6 +442,80 @@ pub const Renderer = struct {
         }
     }.init;
 
+    /// Initialize shared GPU resources (shader, pipeline, buffers, bind group).
+    /// Called by all three init paths after they obtain a device and queue.
+    /// On error, releases any resources created so far within this function.
+    fn initSharedResources(
+        self: *Self,
+        device: zgpu.wgpu.Device,
+        queue: zgpu.wgpu.Queue,
+        width: u32,
+        height: u32,
+    ) RendererError!void {
+        // Create shader module from embedded WGSL source
+        const shader_module = createShaderModule(device) orelse {
+            log.err("failed to create shader module", .{});
+            return RendererError.ShaderCompilationFailed;
+        };
+        errdefer shader_module.release();
+
+        // Create bind group layout for uniform buffer (screen dimensions)
+        const bind_group_layout = createBindGroupLayout(device);
+        errdefer bind_group_layout.release();
+        log.debug("bind group layout created for uniforms", .{});
+
+        // Create pipeline layout with the bind group layout in slot 0
+        const bind_group_layouts = [_]zgpu.wgpu.BindGroupLayout{bind_group_layout};
+        const pipeline_layout = device.createPipelineLayout(.{
+            .next_in_chain = null,
+            .label = "Main Pipeline Layout",
+            .bind_group_layout_count = bind_group_layouts.len,
+            .bind_group_layouts = &bind_group_layouts,
+        });
+        errdefer pipeline_layout.release();
+        log.debug("pipeline layout created with bind group layout in slot 0", .{});
+
+        // Create render pipeline for triangle rendering
+        const render_pipeline = createRenderPipeline(device, pipeline_layout, shader_module) orelse {
+            log.err("failed to create render pipeline", .{});
+            return RendererError.PipelineCreationFailed;
+        };
+        // No errdefer needed for render_pipeline - it's assigned to self below,
+        // and if we reach this point, remaining operations are infallible.
+
+        // Create dynamic vertex buffer
+        const vertex_result = createVertexBuffer(device);
+        log.info("dynamic vertex buffer created: {} vertices capacity ({} bytes)", .{
+            vertex_result.capacity,
+            @as(u64, vertex_result.capacity) * @sizeOf(Vertex),
+        });
+
+        // Create uniform buffer for screen dimensions
+        const uniform_buffer = createUniformBuffer(device);
+        log.info("uniform buffer created for screen dimensions", .{});
+
+        // Initialize uniform buffer with current screen dimensions
+        const initial_uniforms: Uniforms = .{
+            .screen_size = .{ @floatFromInt(width), @floatFromInt(height) },
+        };
+        queue.writeBuffer(uniform_buffer, 0, Uniforms, &.{initial_uniforms});
+        log.info("uniform buffer initialized with screen size: {}x{}", .{ width, height });
+
+        // Create bind group containing the uniform buffer
+        const bind_group = createBindGroup(device, bind_group_layout, uniform_buffer);
+        log.info("bind group created with uniform buffer", .{});
+
+        // Assign all shared resources to self
+        self.shader_module = shader_module;
+        self.bind_group_layout = bind_group_layout;
+        self.pipeline_layout = pipeline_layout;
+        self.render_pipeline = render_pipeline;
+        self.vertex_buffer = vertex_result.buffer;
+        self.vertex_buffer_capacity = vertex_result.capacity;
+        self.uniform_buffer = uniform_buffer;
+        self.bind_group = bind_group;
+    }
+
     fn initNativeImpl(allocator: std.mem.Allocator, window: *zglfw.Window, width: u32, height: u32) RendererError!Self {
         log.debug("initializing renderer", .{});
 
@@ -518,76 +592,9 @@ pub const Renderer = struct {
         );
         log.info("WebGPU swap chain created: {}x{}", .{ width, height });
 
-        // Create shader module from embedded WGSL source
-        const shader_module = createShaderModule(device) orelse {
-            log.err("failed to create shader module", .{});
-            swapchain.release();
-            queue.release();
-            device.release();
-            adapter.release();
-            surface.release();
-            instance.release();
-            return RendererError.ShaderCompilationFailed;
-        };
-
-        // Create bind group layout for uniform buffer (screen dimensions).
-        // Defines the interface between Zig code and shader for screen dimensions.
-        const bind_group_layout = createBindGroupLayout(device);
-        log.debug("bind group layout created for uniforms", .{});
-
-        // Create pipeline layout with the bind group layout in slot 0.
-        // This ensures the render pipeline expects a bind group with uniform buffer at group 0.
-        const bind_group_layouts = [_]zgpu.wgpu.BindGroupLayout{bind_group_layout};
-        const pipeline_layout = device.createPipelineLayout(.{
-            .next_in_chain = null,
-            .label = "Main Pipeline Layout",
-            .bind_group_layout_count = bind_group_layouts.len,
-            .bind_group_layouts = &bind_group_layouts,
-        });
-        log.debug("pipeline layout created with bind group layout in slot 0", .{});
-
-        // Create render pipeline for triangle rendering
-        const render_pipeline = createRenderPipeline(device, pipeline_layout, shader_module) orelse {
-            log.err("failed to create render pipeline", .{});
-            pipeline_layout.release();
-            shader_module.release();
-            swapchain.release();
-            queue.release();
-            device.release();
-            adapter.release();
-            surface.release();
-            instance.release();
-            return RendererError.PipelineCreationFailed;
-        };
-
-        // Create dynamic vertex buffer with max capacity.
-        // Size = 10,000 vertices * 20 bytes = 200KB.
-        const vertex_result = createVertexBuffer(device);
-        log.info("dynamic vertex buffer created: {} vertices capacity ({} bytes)", .{
-            vertex_result.capacity,
-            @as(u64, vertex_result.capacity) * @sizeOf(Vertex),
-        });
-
-        // Create uniform buffer for screen dimensions.
-        // WebGPU requires uniform buffers to be 16-byte aligned, so we allocate 16 bytes
-        // even though Uniforms is only 8 bytes.
-        const uniform_buffer = createUniformBuffer(device);
-        log.info("uniform buffer created for screen dimensions", .{});
-
-        // Initialize uniform buffer with current screen dimensions.
-        // The shader needs these values to transform screen coordinates to NDC.
-        const initial_uniforms: Uniforms = .{
-            .screen_size = .{ @floatFromInt(width), @floatFromInt(height) },
-        };
-        queue.writeBuffer(uniform_buffer, 0, Uniforms, &.{initial_uniforms});
-        log.info("uniform buffer initialized with screen size: {}x{}", .{ width, height });
-
-        // Create bind group containing the uniform buffer.
-        // This connects the uniform buffer to binding 0 in the shader.
-        const bind_group = createBindGroup(device, bind_group_layout, uniform_buffer);
-        log.info("bind group created with uniform buffer", .{});
-
-        return Self{
+        // Build the result struct with backend-specific fields, then
+        // initialize shared GPU resources (shader, pipeline, buffers, bind group).
+        var self: Self = .{
             .allocator = allocator,
             .command_buffer = .empty,
             .native_instance = native_instance,
@@ -600,20 +607,35 @@ pub const Renderer = struct {
             .window = window,
             .swapchain_width = width,
             .swapchain_height = height,
-            .shader_module = shader_module,
-            .bind_group_layout = bind_group_layout,
-            .pipeline_layout = pipeline_layout,
-            .render_pipeline = render_pipeline,
-            .vertex_buffer = vertex_result.buffer,
-            .vertex_buffer_capacity = vertex_result.capacity,
-            .uniform_buffer = uniform_buffer,
-            .bind_group = bind_group,
+            // Shared resources initialized below by initSharedResources
+            .shader_module = null,
+            .bind_group_layout = null,
+            .pipeline_layout = null,
+            .render_pipeline = null,
+            .vertex_buffer = null,
+            .vertex_buffer_capacity = 0,
+            .uniform_buffer = null,
+            .bind_group = null,
             // Screenshot resources are created lazily on first capture
             .screenshot_texture = null,
             .screenshot_staging_buffer = null,
             .screenshot_width = 0,
             .screenshot_height = 0,
         };
+
+        self.initSharedResources(device, queue, width, height) catch |err| {
+            // Release backend-specific resources on shared init failure
+            swapchain.release();
+            queue.release();
+            device.release();
+            adapter.release();
+            surface.release();
+            instance.release();
+            dniDestroy(native_instance);
+            return err;
+        };
+
+        return self;
     }
 
     /// Initialize the renderer for headless (offscreen) rendering (native only).
@@ -682,67 +704,9 @@ pub const Renderer = struct {
         const queue = device.getQueue();
         log.debug("WebGPU queue obtained", .{});
 
-        // Create shader module from embedded WGSL source
-        const shader_module = createShaderModule(device) orelse {
-            log.err("failed to create shader module", .{});
-            queue.release();
-            device.release();
-            adapter.release();
-            instance.release();
-            return RendererError.ShaderCompilationFailed;
-        };
-
-        // Create bind group layout for uniform buffer (screen dimensions)
-        const bind_group_layout = createBindGroupLayout(device);
-        log.debug("bind group layout created for uniforms", .{});
-
-        // Create pipeline layout with the bind group layout in slot 0
-        const bind_group_layouts = [_]zgpu.wgpu.BindGroupLayout{bind_group_layout};
-        const pipeline_layout = device.createPipelineLayout(.{
-            .next_in_chain = null,
-            .label = "Main Pipeline Layout",
-            .bind_group_layout_count = bind_group_layouts.len,
-            .bind_group_layouts = &bind_group_layouts,
-        });
-        log.debug("pipeline layout created with bind group layout in slot 0", .{});
-
-        // Create render pipeline for triangle rendering (uses BGRA format, same as all backends)
-        const render_pipeline = createRenderPipeline(device, pipeline_layout, shader_module) orelse {
-            log.err("failed to create render pipeline", .{});
-            pipeline_layout.release();
-            shader_module.release();
-            queue.release();
-            device.release();
-            adapter.release();
-            instance.release();
-            return RendererError.PipelineCreationFailed;
-        };
-
-        // Create dynamic vertex buffer
-        const vertex_result = createVertexBuffer(device);
-        log.info("dynamic vertex buffer created: {} vertices capacity ({} bytes)", .{
-            vertex_result.capacity,
-            @as(u64, vertex_result.capacity) * @sizeOf(Vertex),
-        });
-
-        // Create uniform buffer for screen dimensions
-        const uniform_buffer = createUniformBuffer(device);
-        log.info("uniform buffer created for screen dimensions", .{});
-
-        // Initialize uniform buffer with dimensions
-        const initial_uniforms: Uniforms = .{
-            .screen_size = .{ @floatFromInt(width), @floatFromInt(height) },
-        };
-        queue.writeBuffer(uniform_buffer, 0, Uniforms, &.{initial_uniforms});
-        log.info("uniform buffer initialized with screen size: {}x{}", .{ width, height });
-
-        // Create bind group containing the uniform buffer
-        const bind_group = createBindGroup(device, bind_group_layout, uniform_buffer);
-        log.info("bind group created with uniform buffer", .{});
-
-        log.info("headless renderer initialization complete", .{});
-
-        return Self{
+        // Build the result struct with backend-specific fields, then
+        // initialize shared GPU resources (shader, pipeline, buffers, bind group).
+        var self: Self = .{
             .allocator = allocator,
             .command_buffer = .empty,
             .native_instance = native_instance,
@@ -755,19 +719,34 @@ pub const Renderer = struct {
             .window = null, // No window in headless mode
             .swapchain_width = width,
             .swapchain_height = height,
-            .shader_module = shader_module,
-            .bind_group_layout = bind_group_layout,
-            .pipeline_layout = pipeline_layout,
-            .render_pipeline = render_pipeline,
-            .vertex_buffer = vertex_result.buffer,
-            .vertex_buffer_capacity = vertex_result.capacity,
-            .uniform_buffer = uniform_buffer,
-            .bind_group = bind_group,
+            // Shared resources initialized below by initSharedResources
+            .shader_module = null,
+            .bind_group_layout = null,
+            .pipeline_layout = null,
+            .render_pipeline = null,
+            .vertex_buffer = null,
+            .vertex_buffer_capacity = 0,
+            .uniform_buffer = null,
+            .bind_group = null,
             .screenshot_texture = null,
             .screenshot_staging_buffer = null,
             .screenshot_width = 0,
             .screenshot_height = 0,
         };
+
+        self.initSharedResources(device, queue, width, height) catch |err| {
+            // Release backend-specific resources on shared init failure
+            queue.release();
+            device.release();
+            adapter.release();
+            instance.release();
+            dniDestroy(native_instance);
+            return err;
+        };
+
+        log.info("headless renderer initialization complete", .{});
+
+        return self;
     }
 
     /// Initialize the renderer for web/WASM builds using browser WebGPU.
@@ -871,71 +850,9 @@ pub const Renderer = struct {
         };
         log.info("WebGPU swap chain created: {}x{}", .{ width, height });
 
-        // Create shader module from embedded WGSL source
-        const shader_module = createShaderModule(device) orelse {
-            log.err("failed to create shader module", .{});
-            swapchain.release();
-            queue.release();
-            device.release();
-            adapter.release();
-            surface.release();
-            instance.release();
-            return RendererError.ShaderCompilationFailed;
-        };
-
-        // Create bind group layout for uniform buffer (screen dimensions)
-        const bind_group_layout = createBindGroupLayout(device);
-        log.debug("bind group layout created for uniforms", .{});
-
-        // Create pipeline layout with the bind group layout in slot 0
-        const bind_group_layouts = [_]zgpu.wgpu.BindGroupLayout{bind_group_layout};
-        const pipeline_layout = device.createPipelineLayout(.{
-            .next_in_chain = null,
-            .label = "Web Pipeline Layout",
-            .bind_group_layout_count = bind_group_layouts.len,
-            .bind_group_layouts = &bind_group_layouts,
-        });
-        log.debug("pipeline layout created with bind group layout in slot 0", .{});
-
-        // Create render pipeline for triangle rendering (uses BGRA format like desktop swap chain)
-        const render_pipeline = createRenderPipeline(device, pipeline_layout, shader_module) orelse {
-            log.err("failed to create render pipeline", .{});
-            pipeline_layout.release();
-            shader_module.release();
-            swapchain.release();
-            queue.release();
-            device.release();
-            adapter.release();
-            surface.release();
-            instance.release();
-            return RendererError.PipelineCreationFailed;
-        };
-
-        // Create dynamic vertex buffer
-        const vertex_result = createVertexBuffer(device);
-        log.info("dynamic vertex buffer created: {} vertices capacity ({} bytes)", .{
-            vertex_result.capacity,
-            @as(u64, vertex_result.capacity) * @sizeOf(Vertex),
-        });
-
-        // Create uniform buffer for screen dimensions
-        const uniform_buffer = createUniformBuffer(device);
-        log.info("uniform buffer created for screen dimensions", .{});
-
-        // Initialize uniform buffer with current screen dimensions
-        const initial_uniforms: Uniforms = .{
-            .screen_size = .{ @floatFromInt(width), @floatFromInt(height) },
-        };
-        queue.writeBuffer(uniform_buffer, 0, Uniforms, &.{initial_uniforms});
-        log.info("uniform buffer initialized with screen size: {}x{}", .{ width, height });
-
-        // Create bind group containing the uniform buffer
-        const bind_group = createBindGroup(device, bind_group_layout, uniform_buffer);
-        log.info("bind group created with uniform buffer", .{});
-
-        log.info("web renderer initialization complete", .{});
-
-        return Self{
+        // Build the result struct with backend-specific fields, then
+        // initialize shared GPU resources (shader, pipeline, buffers, bind group).
+        var self: Self = .{
             .allocator = allocator,
             .command_buffer = .empty,
             // No native_instance on web - browser provides WebGPU
@@ -948,19 +865,35 @@ pub const Renderer = struct {
             .window = null, // No GLFW window on web
             .swapchain_width = width,
             .swapchain_height = height,
-            .shader_module = shader_module,
-            .bind_group_layout = bind_group_layout,
-            .pipeline_layout = pipeline_layout,
-            .render_pipeline = render_pipeline,
-            .vertex_buffer = vertex_result.buffer,
-            .vertex_buffer_capacity = vertex_result.capacity,
-            .uniform_buffer = uniform_buffer,
-            .bind_group = bind_group,
+            // Shared resources initialized below by initSharedResources
+            .shader_module = null,
+            .bind_group_layout = null,
+            .pipeline_layout = null,
+            .render_pipeline = null,
+            .vertex_buffer = null,
+            .vertex_buffer_capacity = 0,
+            .uniform_buffer = null,
+            .bind_group = null,
             .screenshot_texture = null,
             .screenshot_staging_buffer = null,
             .screenshot_width = 0,
             .screenshot_height = 0,
         };
+
+        self.initSharedResources(device, queue, width, height) catch |err| {
+            // Release backend-specific resources on shared init failure
+            swapchain.release();
+            queue.release();
+            device.release();
+            adapter.release();
+            surface.release();
+            instance.release();
+            return err;
+        };
+
+        log.info("web renderer initialization complete", .{});
+
+        return self;
     }
 
     /// Create an OffscreenRenderTarget for headless rendering.
