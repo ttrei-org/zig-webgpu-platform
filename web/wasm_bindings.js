@@ -232,6 +232,7 @@ const emscriptenStubs = {
     emscripten_get_now: () => performance.now(),
     
     emscripten_set_main_loop: (funcPtr, fps, simulateInfiniteLoop) => {
+        console.log("emscripten_set_main_loop called: funcPtr=" + funcPtr + " fps=" + fps + " sim=" + simulateInfiniteLoop);
         mainLoopCallback = funcPtr;
         mainLoopRunning = true;
 
@@ -241,6 +242,7 @@ const emscriptenStubs = {
             return;
         }
 
+        let frameCount = 0;
         function frame() {
             if (!mainLoopRunning) return;
             try {
@@ -250,9 +252,47 @@ const emscriptenStubs = {
                     mainLoopRunning = false;
                     return;
                 }
+                // Push error scopes on first frame to catch validation errors
+                if (frameCount === 0 && preInitDevice) {
+                    preInitDevice.pushErrorScope("validation");
+                    preInitDevice.pushErrorScope("out-of-memory");
+                }
                 func();
+                frameCount++;
+                if (frameCount === 1) {
+                    console.log("Main loop: first frame executed");
+                    // Pop error scopes and report
+                    if (preInitDevice) {
+                        preInitDevice.popErrorScope().then(err => {
+                            if (err) console.error("GPU OOM error: " + err.message);
+                            else console.log("No OOM errors on first frame");
+                        });
+                        preInitDevice.popErrorScope().then(err => {
+                            if (err) console.error("GPU validation error: " + err.message);
+                            else console.log("No validation errors on first frame");
+                        });
+                    }
+                } else if (frameCount === 5) {
+                    // After a few frames, check if canvas has any non-zero content
+                    try {
+                        const ctx2d = document.createElement("canvas").getContext("2d");
+                        ctx2d.canvas.width = 4;
+                        ctx2d.canvas.height = 4;
+                        ctx2d.drawImage(canvasElement, 0, 0, 4, 4);
+                        const px = ctx2d.getImageData(0, 0, 4, 4).data;
+                        const samples = [];
+                        for (let i = 0; i < 16; i += 4) {
+                            samples.push(`(${px[i]},${px[i+1]},${px[i+2]},${px[i+3]})`);
+                        }
+                        console.log("Canvas pixel samples: " + samples.join(" "));
+                    } catch (e) {
+                        console.log("Canvas readback failed: " + e.message);
+                    }
+                } else if (frameCount % 60 === 0) {
+                    console.log("Main loop: frame " + frameCount);
+                }
             } catch (e) {
-                console.error("Main loop error:", e);
+                console.error("Main loop error (frame " + frameCount + "):", e);
                 mainLoopRunning = false;
                 return;
             }
@@ -415,7 +455,7 @@ const webgpuStubs = {
         if (!obj || !obj.device) return;
         
         obj.device.addEventListener("uncapturedError", (event) => {
-            console.error("WebGPU uncaptured error:", event.error);
+            console.error("WebGPU uncaptured error:", event.error.message);
         });
     },
 
@@ -456,13 +496,18 @@ const webgpuStubs = {
 
         // Configure the canvas context (this is browser's equivalent of swap chain)
         const formatStr = preferredCanvasFormat;
+        const zigFormatStr = textureFormatToJS(format);
+        console.log(`Swap chain: zig format=${zigFormatStr} (0x${format.toString(16)}), browser preferred=${formatStr}, size=${width}x${height}`);
+        console.log(`Canvas backing: ${canvasElement.width}x${canvasElement.height}, CSS: ${canvasElement.clientWidth}x${canvasElement.clientHeight}`);
         
         try {
             surfaceObj.context.configure({
                 device: deviceObj.device,
                 format: formatStr,
                 alphaMode: "opaque",
+                usage: GPUTextureUsage.RENDER_ATTACHMENT,
             });
+            console.log("Canvas context configured successfully");
 
             // Store dimensions for swap chain object
             const swapChain = {
@@ -475,7 +520,7 @@ const webgpuStubs = {
             };
 
             const handle = registerHandle(swapChain);
-            console.log(`WebGPU swap chain configured: ${width}x${height}`);
+            console.log(`WebGPU swap chain configured: ${width}x${height}, format: ${formatStr}`);
             return handle;
         } catch (e) {
             console.error("Swap chain creation failed:", e);
@@ -737,8 +782,10 @@ const webgpuStubs = {
             },
         };
 
+        console.log("Creating render pipeline with format:", preferredCanvasFormat);
         try {
             const pipeline = deviceObj.device.createRenderPipeline(pipelineDesc);
+            console.log("Render pipeline created successfully");
             return registerHandle({ type: "renderPipeline", pipeline: pipeline });
         } catch (e) {
             console.error("Render pipeline creation failed:", e);
@@ -888,34 +935,65 @@ const webgpuStubs = {
         freeHandle(queueHandle);
     },
 
-    wgpuQueueSubmit: (queueHandle, commandCount, commandsPtr) => {
-        const queueObj = getHandle(queueHandle);
-        if (!queueObj || !queueObj.queue) return;
-
-        const commandBuffers = [];
-        for (let i = 0; i < commandCount; i++) {
-            const cmdHandle = readU32(commandsPtr + i * 4);
-            const cmdObj = getHandle(cmdHandle);
-            if (cmdObj && cmdObj.buffer) {
-                commandBuffers.push(cmdObj.buffer);
-                freeHandle(cmdHandle);
+    wgpuQueueSubmit: (() => {
+        let submitCount = 0;
+        return (queueHandle, commandCount, commandsPtr) => {
+            const queueObj = getHandle(queueHandle);
+            if (!queueObj || !queueObj.queue) {
+                console.error("queueSubmit: invalid queue handle");
+                return;
             }
-        }
 
-        if (commandBuffers.length > 0) {
-            queueObj.queue.submit(commandBuffers);
-        }
-    },
+            const commandBuffers = [];
+            for (let i = 0; i < commandCount; i++) {
+                const cmdHandle = readU32(commandsPtr + i * 4);
+                const cmdObj = getHandle(cmdHandle);
+                if (cmdObj && cmdObj.buffer) {
+                    commandBuffers.push(cmdObj.buffer);
+                    freeHandle(cmdHandle);
+                }
+            }
 
-    wgpuQueueWriteBuffer: (queueHandle, bufferHandle, bufferOffset, dataPtr, size) => {
-        const queueObj = getHandle(queueHandle);
-        const bufferObj = getHandle(bufferHandle);
-        
-        if (!queueObj || !queueObj.queue || !bufferObj || !bufferObj.buffer) return;
+            if (commandBuffers.length > 0) {
+                try {
+                    queueObj.queue.submit(commandBuffers);
+                    submitCount++;
+                    if (submitCount === 1) {
+                        console.log("First queue.submit() succeeded (" + commandBuffers.length + " buffers)");
+                    }
+                } catch (e) {
+                    console.error("queue.submit() failed:", e);
+                }
+            }
+        };
+    })(),
 
-        const data = new Uint8Array(wasmMemory.buffer, dataPtr, Number(size));
-        queueObj.queue.writeBuffer(bufferObj.buffer, Number(bufferOffset), data);
-    },
+    wgpuQueueWriteBuffer: (() => {
+        let writeCount = 0;
+        return (queueHandle, bufferHandle, bufferOffset, dataPtr, size) => {
+            const queueObj = getHandle(queueHandle);
+            const bufferObj = getHandle(bufferHandle);
+            
+            if (!queueObj || !queueObj.queue || !bufferObj || !bufferObj.buffer) return;
+
+            const data = new Uint8Array(wasmMemory.buffer, dataPtr, Number(size));
+
+            // Log first few writeBuffer calls to see uniform data
+            if (writeCount < 3) {
+                const sizeN = Number(size);
+                if (sizeN <= 16) {
+                    // Likely uniform buffer - dump as floats
+                    const fview = new Float32Array(wasmMemory.buffer, dataPtr, sizeN / 4);
+                    console.log("writeBuffer #" + writeCount + ": size=" + sizeN + " offset=" + Number(bufferOffset) + " f32=[" + Array.from(fview).join(", ") + "]");
+                } else {
+                    console.log("writeBuffer #" + writeCount + ": size=" + sizeN + " offset=" + Number(bufferOffset));
+                }
+                writeCount++;
+            }
+
+            queueObj.queue.writeBuffer(bufferObj.buffer, Number(bufferOffset), data);
+        };
+    })(),
 
     // -------------------------------------------------------------------------
     // Swap Chain
@@ -930,19 +1008,29 @@ const webgpuStubs = {
         freeHandle(swapChainHandle);
     },
 
-    wgpuSwapChainGetCurrentTextureView: (swapChainHandle) => {
-        const obj = getHandle(swapChainHandle);
-        if (!obj || !obj.context) return 0;
+    wgpuSwapChainGetCurrentTextureView: (() => {
+        let logged = false;
+        return (swapChainHandle) => {
+            const obj = getHandle(swapChainHandle);
+            if (!obj || !obj.context) {
+                console.error("getCurrentTextureView: invalid swap chain handle or no context");
+                return 0;
+            }
 
-        try {
-            const texture = obj.context.getCurrentTexture();
-            const view = texture.createView();
-            return registerHandle({ type: "textureView", view: view });
-        } catch (e) {
-            console.error("Failed to get current texture view:", e);
-            return 0;
-        }
-    },
+            try {
+                const texture = obj.context.getCurrentTexture();
+                if (!logged) {
+                    console.log("getCurrentTexture: " + texture.width + "x" + texture.height + " format=" + texture.format);
+                    logged = true;
+                }
+                const view = texture.createView();
+                return registerHandle({ type: "textureView", view: view });
+            } catch (e) {
+                console.error("Failed to get current texture view:", e);
+                return 0;
+            }
+        };
+    })(),
 
     wgpuSwapChainPresent: (swapChainHandle) => {
         // In browser WebGPU, presentation happens automatically at the end of the frame.
@@ -953,7 +1041,9 @@ const webgpuStubs = {
     // Command Encoder
     // -------------------------------------------------------------------------
 
-    wgpuCommandEncoderBeginRenderPass: (encoderHandle, descriptorPtr) => {
+    wgpuCommandEncoderBeginRenderPass: (() => {
+        let loggedOnce = false;
+        return (encoderHandle, descriptorPtr) => {
         const encoderObj = getHandle(encoderHandle);
         if (!encoderObj || !encoderObj.encoder) return 0;
 
@@ -993,6 +1083,12 @@ const webgpuStubs = {
 
             const viewObj = getHandle(viewHandle);
 
+            if (!loggedOnce) {
+                console.log("RenderPass attach: view=" + viewHandle + " loadOp=" + loadOp + " storeOp=" + storeOp);
+                console.log("RenderPass clear: r=" + clearR + " g=" + clearG + " b=" + clearB + " a=" + clearA);
+                loggedOnce = true;
+            }
+
             const attachment = {
                 view: viewObj ? viewObj.view : null,
                 loadOp: loadOp === 1 ? "clear" : "load",
@@ -1017,9 +1113,14 @@ const webgpuStubs = {
             return registerHandle({ type: "renderPassEncoder", pass: renderPass });
         } catch (e) {
             console.error("Begin render pass failed:", e);
+            console.error("Attachments:", JSON.stringify(colorAttachments.map(a => ({
+                hasView: !!a.view, loadOp: a.loadOp, storeOp: a.storeOp,
+                clear: a.clearValue
+            }))));
             return 0;
         }
-    },
+    };
+    })(),
 
     wgpuCommandEncoderFinish: (encoderHandle, descriptorPtr) => {
         const encoderObj = getHandle(encoderHandle);
@@ -1105,7 +1206,7 @@ export async function init(wasmPath) {
 
     // Determine preferred canvas format
     preferredCanvasFormat = navigator.gpu.getPreferredCanvasFormat();
-
+    console.log("Preferred canvas format:", preferredCanvasFormat);
 
     // Pre-initialize WebGPU adapter and device BEFORE loading WASM.
     // This solves the async initialization problem - the WASM code uses synchronous
@@ -1120,13 +1221,26 @@ export async function init(wasmPath) {
     if (!preInitAdapter) {
         throw new Error("Failed to get WebGPU adapter");
     }
-
+    console.log("Adapter obtained");
+    if (preInitAdapter.info) {
+        const info = preInitAdapter.info;
+        console.log("Adapter info: " + JSON.stringify({vendor: info.vendor, architecture: info.architecture, device: info.device, description: info.description}));
+    }
+    // Log adapter features
+    const features = [];
+    preInitAdapter.features.forEach(f => features.push(f));
+    console.log("Adapter features: " + features.join(", "));
 
     preInitDevice = await preInitAdapter.requestDevice();
     if (!preInitDevice) {
         throw new Error("Failed to get WebGPU device");
     }
+    console.log("Device obtained");
 
+    // Listen for device lost
+    preInitDevice.lost.then(info => {
+        console.error("WebGPU device lost: " + info.reason + " - " + info.message);
+    });
 
     // Get WebGPU context for canvas
     gpuContext = canvasElement.getContext("webgpu");

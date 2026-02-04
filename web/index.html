@@ -21,6 +21,7 @@
             display: block;
             width: 100vw;
             height: 100vh;
+            background: red;
         }
         .error-message {
             display: none;
@@ -43,11 +44,73 @@
         #canvas.hidden {
             display: none;
         }
+        #debug-overlay {
+            position: fixed;
+            top: 0;
+            left: 0;
+            right: 0;
+            max-height: 50vh;
+            overflow-y: auto;
+            background: rgba(0, 0, 0, 0.85);
+            color: #0f0;
+            font-family: monospace;
+            font-size: 11px;
+            padding: 8px;
+            z-index: 9999;
+            pointer-events: none;
+            white-space: pre-wrap;
+            word-break: break-all;
+        }
+        #debug-overlay .err { color: #f66; }
+        #debug-overlay .warn { color: #ff0; }
     </style>
 </head>
 <body>
     <canvas id="canvas" width="800" height="600"></canvas>
     <div id="error" class="error-message"></div>
+    <div id="debug-overlay"></div>
+
+    <!-- Debug overlay: intercept console output and display on screen -->
+    <script>
+        (function() {
+            const overlay = document.getElementById("debug-overlay");
+            let lineCount = 0;
+            const MAX_LINES = 200;
+
+            function addLine(cls, ...args) {
+                const text = args.map(a => {
+                    if (a instanceof Error) return a.message + "\n" + a.stack;
+                    if (typeof a === "object") try { return JSON.stringify(a); } catch(e) { return String(a); }
+                    return String(a);
+                }).join(" ");
+                const span = document.createElement("span");
+                span.className = cls;
+                span.textContent = text + "\n";
+                overlay.appendChild(span);
+                lineCount++;
+                if (lineCount > MAX_LINES) {
+                    overlay.removeChild(overlay.firstChild);
+                    lineCount--;
+                }
+                overlay.scrollTop = overlay.scrollHeight;
+            }
+
+            const origLog = console.log.bind(console);
+            const origError = console.error.bind(console);
+            const origWarn = console.warn.bind(console);
+
+            console.log = function(...args) { origLog(...args); addLine("", ...args); };
+            console.error = function(...args) { origError(...args); addLine("err", "ERR: ", ...args); };
+            console.warn = function(...args) { origWarn(...args); addLine("warn", "WARN: ", ...args); };
+
+            // Show basic device info immediately
+            console.log("UA: " + navigator.userAgent);
+            console.log("DPR: " + window.devicePixelRatio);
+            console.log("Screen: " + screen.width + "x" + screen.height);
+            console.log("Inner: " + window.innerWidth + "x" + window.innerHeight);
+            console.log("WebGPU: " + (navigator.gpu ? "yes" : "NO"));
+        })();
+    </script>
 
     <!-- Load the Emscripten-generated JavaScript module -->
     <script type="module" src="./zig_gui_experiment.js"></script>
@@ -75,11 +138,13 @@
                 const dpr = window.devicePixelRatio || 1;
                 canvas.width = Math.floor(window.innerWidth * dpr);
                 canvas.height = Math.floor(window.innerHeight * dpr);
+                console.log("Canvas resized: " + canvas.width + "x" + canvas.height + " (dpr=" + dpr + ")");
             }
             resizeCanvas();
             window.addEventListener("resize", resizeCanvas);
 
             try {
+                console.log("Calling init()...");
                 // Initialize using the generated JS module
                 // The init() function handles WASM loading
                 // WebGPU initialization is handled by the WASM module via wgpu* bindings
@@ -87,12 +152,14 @@
 
                 console.log("WASM module loaded");
                 console.log("Canvas size:", canvas.width, "x", canvas.height);
+                console.log("Exports: " + Object.keys(exports).join(", "));
 
                 // Call the WASM entry point
                 // wasm_main initializes WebGPU, creates the renderer, and starts the main loop
                 if (exports.wasm_main) {
                     console.log("Calling wasm_main...");
                     exports.wasm_main();
+                    console.log("wasm_main returned");
                 } else {
                     console.warn("wasm_main export not found in WASM module");
                 }

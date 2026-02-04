@@ -1187,12 +1187,11 @@ pub const WebPlatform = struct {
     }
 
     /// Get the framebuffer size in physical pixels.
-    /// On high-DPI displays, this is larger than the CSS pixel canvas size,
-    /// scaled by the device pixel ratio for crisp rendering.
+    /// The canvas backing buffer is already sized to physical pixels by JavaScript
+    /// (innerWidth * devicePixelRatio), so we return the canvas dimensions directly.
+    /// No additional DPR scaling is needed here.
     pub fn getFramebufferSize(self: *const Self) Size {
-        const scaled_width: u32 = @intFromFloat(@as(f64, @floatFromInt(self.width)) * self.pixel_ratio);
-        const scaled_height: u32 = @intFromFloat(@as(f64, @floatFromInt(self.height)) * self.pixel_ratio);
-        return .{ .width = scaled_width, .height = scaled_height };
+        return .{ .width = self.width, .height = self.height };
     }
 
     /// Check if a key is currently pressed.
