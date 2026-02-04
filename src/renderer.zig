@@ -314,11 +314,13 @@ pub const Renderer = struct {
     /// Combines shader stages, vertex layout, and output format configuration.
     render_pipeline: zgpu.wgpu.RenderPipeline,
     /// Dynamic vertex buffer for triangle rendering.
-    /// Holds up to max_vertex_capacity vertices, reused each frame via queue.writeBuffer().
-    /// Size = max_vertex_capacity * @sizeOf(Vertex) = 10000 * 20 = 200KB.
+    /// Holds up to max_vertex_capacity vertices per draw call, reused each frame.
+    /// When a frame has more triangles than fit in one batch, flushBatch issues
+    /// multiple draw calls automatically — no triangles are ever dropped.
+    /// Size = max_vertex_capacity * @sizeOf(Vertex) = 10000 * 24 = 240KB.
     vertex_buffer: zgpu.wgpu.Buffer,
-    /// Maximum number of vertices the buffer can hold.
-    /// Set to 10,000 vertices (~200KB) for efficient batched rendering.
+    /// Maximum number of vertices the buffer can hold per draw call.
+    /// Frames with more triangles are split across multiple draw calls.
     vertex_buffer_capacity: u32,
     /// Uniform buffer for screen dimensions.
     /// Holds the Uniforms struct (8 bytes data, 16 bytes allocated for GPU alignment).
@@ -998,39 +1000,79 @@ pub const Renderer = struct {
         log.debug("triangle drawn", .{});
     }
 
-    /// Flush all queued triangle draw commands in a single batched draw call.
-    /// Uploads all queued triangle vertices to the GPU buffer and issues one draw call.
-    /// This batched approach is much more efficient than one draw call per triangle -
-    /// it minimizes GPU state changes and CPU overhead.
+    /// Flush all queued triangle draw commands as batched draw calls.
+    /// Uploads triangle vertices to the GPU buffer in chunks that fit within
+    /// the vertex buffer capacity, issuing one draw call per chunk. When all
+    /// triangles fit in a single batch (the common case), this is exactly one
+    /// draw call. For large scenes exceeding the 10,000-vertex buffer, multiple
+    /// draw calls are issued automatically — no triangles are ever dropped.
     ///
     /// Must be called while a render pass is active (before endRenderPass).
     ///
     /// Parameters:
     /// - render_pass: Active render pass encoder to record the draw command to.
     pub fn flushBatch(self: *Self, render_pass: zgpu.wgpu.RenderPassEncoder) void {
-        // Upload all queued triangle vertices to the GPU buffer
-        const vertex_count = self.convertTrianglesToVertices();
+        const commands = self.command_buffer.items;
+        if (commands.len == 0) return;
 
-        // Early exit if no triangles were queued
-        if (vertex_count == 0) {
-            return;
-        }
-
-        // Set render pipeline - configures GPU to use our shader and vertex layout
+        // Set pipeline and bind group once — shared across all draw calls
         render_pass.setPipeline(self.render_pipeline);
-
-        // Set bind group 0 (uniforms) - required by the pipeline layout
         render_pass.setBindGroup(0, self.bind_group, &.{});
 
-        // Bind vertex buffer with the exact size needed for all vertices
-        const vertex_buffer_size: u64 = @as(u64, vertex_count) * @sizeOf(Vertex);
-        render_pass.setVertexBuffer(0, self.vertex_buffer, 0, vertex_buffer_size);
+        const max_triangles_per_batch = self.vertex_buffer_capacity / 3;
+        var commands_processed: u32 = 0;
+        var draw_call_count: u32 = 0;
+        var total_vertices_drawn: u32 = 0;
 
-        // Issue a single draw call for all triangles in the batch.
-        // vertex_count = total_triangles * 3.
-        render_pass.draw(vertex_count, 1, 0, 0);
+        // Process commands in chunks that fit the vertex buffer
+        while (commands_processed < commands.len) {
+            var vertices: [max_vertex_capacity]Vertex = undefined;
+            var batch_triangles: u32 = 0;
 
-        log.debug("batched draw: {} vertices ({} triangles)", .{ vertex_count, vertex_count / 3 });
+            // Fill the vertex array up to buffer capacity
+            var i = commands_processed;
+            while (i < commands.len and batch_triangles < max_triangles_per_batch) {
+                switch (commands[i]) {
+                    .triangle => |triangle| {
+                        const tri_vertices = triangle.toVertices();
+                        const base_idx = batch_triangles * 3;
+                        vertices[base_idx + 0] = tri_vertices[0];
+                        vertices[base_idx + 1] = tri_vertices[1];
+                        vertices[base_idx + 2] = tri_vertices[2];
+                        batch_triangles += 1;
+                    },
+                }
+                i += 1;
+            }
+
+            commands_processed = @intCast(i);
+
+            if (batch_triangles == 0) break;
+
+            const vertex_count = batch_triangles * 3;
+
+            // Upload this chunk to the GPU vertex buffer
+            const vertex_slice = vertices[0..vertex_count];
+            self.queue.writeBuffer(self.vertex_buffer, 0, Vertex, vertex_slice);
+
+            // Bind vertex buffer and draw
+            const vertex_buffer_size: u64 = @as(u64, vertex_count) * @sizeOf(Vertex);
+            render_pass.setVertexBuffer(0, self.vertex_buffer, 0, vertex_buffer_size);
+            render_pass.draw(vertex_count, 1, 0, 0);
+
+            draw_call_count += 1;
+            total_vertices_drawn += vertex_count;
+        }
+
+        if (draw_call_count > 1) {
+            log.info("batched draw: {} vertices ({} triangles) across {} draw calls", .{
+                total_vertices_drawn,
+                total_vertices_drawn / 3,
+                draw_call_count,
+            });
+        } else {
+            log.debug("batched draw: {} vertices ({} triangles)", .{ total_vertices_drawn, total_vertices_drawn / 3 });
+        }
     }
 
     /// End the current frame and present it to the screen.
@@ -1064,84 +1106,6 @@ pub const Renderer = struct {
         self.device.tick();
 
         log.debug("frame ended and presented", .{});
-    }
-
-    /// Convert triangle draw commands to vertices and upload to GPU.
-    /// Iterates through the command buffer, extracts triangles, converts
-    /// each to 3 Vertex structs, and uploads to the dynamic vertex buffer
-    /// using queue.writeBuffer(). Logs a warning if vertex buffer overflows.
-    ///
-    /// Returns the total number of vertices converted and uploaded.
-    fn convertTrianglesToVertices(self: *Self) u32 {
-        var vertex_count: u32 = 0;
-
-        // First pass: count total vertices needed to detect overflow early
-        var triangle_count: u32 = 0;
-        for (self.command_buffer.items) |command| {
-            switch (command) {
-                .triangle => {
-                    triangle_count += 1;
-                },
-            }
-        }
-
-        const required_vertices = triangle_count * 3;
-
-        // Early exit if no triangles to render
-        if (required_vertices == 0) {
-            return 0;
-        }
-
-        // Check for buffer overflow before processing
-        if (required_vertices > self.vertex_buffer_capacity) {
-            log.warn("vertex buffer overflow: {} vertices required, {} capacity. Truncating to {} triangles.", .{
-                required_vertices,
-                self.vertex_buffer_capacity,
-                self.vertex_buffer_capacity / 3,
-            });
-        }
-
-        // Build temporary vertex array from triangle commands.
-        // Use stack allocation for small batches, respecting buffer capacity.
-        const max_vertices = @min(required_vertices, self.vertex_buffer_capacity);
-        const max_triangles = max_vertices / 3;
-
-        // Stack-allocated array for vertices (up to capacity limit).
-        // This avoids heap allocation for the common case.
-        var vertices: [max_vertex_capacity]Vertex = undefined;
-        var current_triangle: u32 = 0;
-
-        for (self.command_buffer.items) |command| {
-            switch (command) {
-                .triangle => |triangle| {
-                    // Stop if we've reached capacity
-                    if (current_triangle >= max_triangles) break;
-
-                    // Convert Triangle to 3 Vertex structs
-                    const tri_vertices = triangle.toVertices();
-                    const base_idx = current_triangle * 3;
-                    vertices[base_idx + 0] = tri_vertices[0];
-                    vertices[base_idx + 1] = tri_vertices[1];
-                    vertices[base_idx + 2] = tri_vertices[2];
-
-                    current_triangle += 1;
-                },
-            }
-        }
-
-        vertex_count = current_triangle * 3;
-
-        // Upload vertex data to GPU buffer.
-        // This transfers CPU-side vertex data to GPU memory before the draw call.
-        // Done once per frame with all triangles batched for efficiency.
-        // Upload vertices to GPU buffer at offset 0.
-        // Size = vertex_count * @sizeOf(Vertex).
-        const vertex_slice = vertices[0..vertex_count];
-        self.queue.writeBuffer(self.vertex_buffer, 0, Vertex, vertex_slice);
-
-        log.debug("uploaded {} vertices ({} triangles) to GPU buffer", .{ vertex_count, current_triangle });
-
-        return vertex_count;
     }
 
     /// Recreate the swap chain with new dimensions.
@@ -1334,13 +1298,13 @@ pub const Renderer = struct {
         return .{ .buffer = buffer, .capacity = max_vertex_capacity };
     }
 
-    /// Maximum vertex capacity for the dynamic vertex buffer.
-    /// 10,000 vertices at 20 bytes each = 200KB.
-    /// This provides enough capacity for ~3,333 triangles per frame.
+    /// Vertex buffer capacity per draw call (not a hard limit on total triangles).
+    /// 10,000 vertices at 24 bytes each = 240KB per batch.
+    /// Frames needing more are automatically split across multiple draw calls.
     pub const max_vertex_capacity: u32 = 10000;
 
-    /// Maximum number of triangles that can be rendered per frame.
-    /// Calculated as max_vertex_capacity / 3 (3 vertices per triangle).
+    /// Maximum triangles per single draw call (vertex buffer batch size).
+    /// Frames can render unlimited triangles via multi-draw chunking.
     pub const max_triangle_capacity: u32 = max_vertex_capacity / 3;
 
     /// Minimum uniform buffer size for WebGPU alignment.
