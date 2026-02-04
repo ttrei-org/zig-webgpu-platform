@@ -411,6 +411,38 @@ pub const App = struct {
         canvas.strokeRect(house_x + 10.0, house_y + 15.0, 18.0, 18.0, 1.0, Color.fromHex(0x5D4037));
         canvas.strokeRect(house_x + house_w - 28.0, house_y + 15.0, 18.0, 18.0, 1.0, Color.fromHex(0x5D4037));
 
+        // -- Zigzag path on the ground (drawPolyline demo) --
+        // A winding trail from left to right across the ground.
+        const zigzag_y = ground_y + 15.0;
+        const zigzag_points = [_][2]f32{
+            .{ vp_w * 0.35, zigzag_y },
+            .{ vp_w * 0.40, zigzag_y - 8.0 },
+            .{ vp_w * 0.45, zigzag_y + 4.0 },
+            .{ vp_w * 0.50, zigzag_y - 6.0 },
+            .{ vp_w * 0.55, zigzag_y + 2.0 },
+            .{ vp_w * 0.58, zigzag_y - 4.0 },
+        };
+        canvas.drawPolyline(&zigzag_points, 2.0, Color.fromHex(0xD7CCC8));
+
+        // -- Star outline in the sky (drawPolyline demo) --
+        // A 5-pointed star drawn as a closed polyline.
+        const star_cx = vp_w * 0.38;
+        const star_cy = vp_h * 0.12;
+        const star_outer: f32 = 12.0;
+        const star_inner: f32 = 5.0;
+        var star_points: [11][2]f32 = undefined;
+        for (0..10) |i| {
+            const angle = @as(f32, @floatFromInt(i)) * (std.math.tau / 10.0) - std.math.pi / 2.0;
+            const r = if (i % 2 == 0) star_outer else star_inner;
+            star_points[i] = .{
+                star_cx + r * @cos(angle),
+                star_cy + r * @sin(angle),
+            };
+        }
+        // Close the star by repeating the first point
+        star_points[10] = star_points[0];
+        canvas.drawPolyline(&star_points, 1.5, Color.fromHex(0xFFEB3B));
+
         // -- Mouse crosshair --
         const mouse_x = self.mouse_state.x;
         const mouse_y = self.mouse_state.y;

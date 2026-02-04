@@ -165,6 +165,35 @@ pub const Canvas = struct {
         self.fillRect(x + w - t, y + t, t, h - 2 * t, color);
     }
 
+    /// Draw a connected sequence of line segments (polyline / line strip).
+    ///
+    /// Iterates consecutive point pairs and draws a line for each segment
+    /// using drawLine(). Each segment is an independent rotated rectangle,
+    /// so joints at sharp angles will have small gaps or overlaps — this is
+    /// acceptable for a first implementation.
+    ///
+    /// Produces (points.len - 1) * 2 triangles (2 per segment).
+    ///
+    /// Parameters:
+    /// - points: Slice of at least 2 [2]f32 positions in logical coordinates.
+    /// - thickness: Line width in logical units.
+    /// - color: Uniform color for all segments.
+    ///
+    /// Coordinates are in screen space (origin top-left, X right, Y down).
+    pub fn drawPolyline(self: Canvas, points: []const [2]f32, thickness: f32, color: Color) void {
+        if (points.len < 2) return;
+        for (0..points.len - 1) |i| {
+            self.drawLine(
+                points[i][0],
+                points[i][1],
+                points[i + 1][0],
+                points[i + 1][1],
+                thickness,
+                color,
+            );
+        }
+    }
+
     /// Draw a filled convex polygon using fan triangulation from the first vertex.
     ///
     /// Only correct for convex polygons. For concave shapes the result
@@ -250,6 +279,23 @@ test "strokeRect signature" {
     const FnInfo = @typeInfo(@TypeOf(Canvas.strokeRect));
     const params = FnInfo.@"fn".params;
     try std.testing.expectEqual(@as(usize, 7), params.len);
+}
+
+test "drawPolyline signature" {
+    // Verify drawPolyline has the correct signature: self, points, thickness, color
+    const FnInfo = @typeInfo(@TypeOf(Canvas.drawPolyline));
+    const params = FnInfo.@"fn".params;
+    try std.testing.expectEqual(@as(usize, 4), params.len);
+}
+
+test "drawPolyline triangle count reasoning" {
+    // drawPolyline calls drawLine() for each consecutive pair.
+    // Each drawLine produces 2 triangles (one rotated rectangle).
+    // For N points: (N-1) segments * 2 triangles = (N-1)*2 triangles total.
+    // With 5 points: 4 segments * 2 = 8 triangles.
+    // We verify the function exists and returns void (no error).
+    const ReturnType = @typeInfo(@TypeOf(Canvas.drawPolyline)).@"fn".return_type.?;
+    try std.testing.expect(ReturnType == void);
 }
 
 test "strokeRect triangle count" {
