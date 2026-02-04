@@ -1,0 +1,5 @@
+1. Read @AGENTS.md
+
+9999. Important! Beads must be self-describing as much as possible - one shouldn't be required to trawl details of other beads to get the necessary context for implementing the subject bead. Beads must be reasonably sized, smaller beads are preferred - you should be able to implement any bead withing 100k token context window. After creating a new bead, ensure it has all the required dependencies to/from other beads. Check the descriptions of other open beads to make sure that the new bead fits into the overall design direction.
+
+ULTIMATE GOAL we want to achieve is a robust 2D graphics platform with a well defined and documented api.
