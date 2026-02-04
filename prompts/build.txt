@@ -7,7 +7,7 @@
 4. Zig build must work after your turn for all supported targets.
 
 5. Before finishing verify the output by analyzing a screenshot of the rendering result.
-Compare screenshots of both native and web output to detect any divergence.
+Compare screenshots of both native and web (see AGENTS.md on how to use playwright with xvfb and firefox) output to detect any divergence.
 
 6. Commit your changes after closing a bead.
 
