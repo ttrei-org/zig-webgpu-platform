@@ -695,7 +695,7 @@ pub fn requestDevice(
                 .next_in_chain = null,
                 .label = "Web Default Queue",
             },
-            .device_lost_callback = null,
+            .device_lost_callback = null, // Set by JS bridge pre-initialization; Zig callback not used on web
             .device_lost_user_data = null,
         },
         callback,

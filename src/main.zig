@@ -96,6 +96,10 @@ fn runFrame(
     pre_submit_hook: ?PreSubmitHook,
 ) void {
     const frame_state = renderer.beginFrame(render_target) catch |err| {
+        if (err == renderer_mod.RendererError.DeviceLost) {
+            // Device lost is handled by the caller's recovery loop — skip silently.
+            return;
+        }
         if (err != renderer_mod.RendererError.BeginFrameFailed) {
             log.warn("beginFrame failed: {}", .{err});
         }
@@ -454,6 +458,25 @@ fn runWindowedImpl(config: Config) void {
             continue;
         }
 
+        // Detect device loss and attempt recovery by reinitializing the renderer.
+        // WebGPU devices can be lost due to driver crashes, GPU hangs, or system sleep/wake.
+        if (renderer.isDeviceLost()) {
+            log.warn("GPU device lost — attempting recovery", .{});
+            renderer.deinit();
+
+            const fb = platform.getFramebufferSize();
+            renderer = Renderer.init(std.heap.page_allocator, platform.window.?, fb.width, fb.height) catch |reinit_err| {
+                log.err("device recovery failed: {} — exiting", .{reinit_err});
+                return;
+            };
+            app.setRenderer(&renderer);
+            swap_chain_target = renderer.createSwapChainRenderTarget();
+            render_target = swap_chain_target.asRenderTarget();
+
+            log.info("GPU device recovered successfully", .{});
+            continue;
+        }
+
         runFrame(&iface, &renderer, render_target, null);
 
         // Check if App wants to take a screenshot after this frame
@@ -629,6 +652,11 @@ const wasm_exports = if (is_wasm) struct {
         // Render frame if renderer and render target are available.
         // On web, WebGPU initialization is asynchronous so renderer may be null initially.
         if (state.renderer) |renderer| {
+            if (renderer.isDeviceLost()) {
+                log.err("GPU device lost on web — cannot recover (requires page reload)", .{});
+                web.emscripten.emscripten_cancel_main_loop();
+                return;
+            }
             if (state.render_target) |rt| {
                 runFrame(state.app_interface, renderer, rt, null);
             }

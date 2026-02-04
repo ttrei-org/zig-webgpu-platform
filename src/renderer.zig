@@ -27,6 +27,12 @@ pub const OffscreenRenderTarget = render_target.OffscreenRenderTarget;
 
 const log = std.log.scoped(.renderer);
 
+/// Global flag set by the device lost callback (callconv(.c), no self access).
+/// Checked by beginFrame() to return DeviceLost to the caller.
+/// Safe because there is exactly one Renderer per process and the callback
+/// may fire from any thread (Dawn) or synchronously (web).
+var global_device_lost: std.atomic.Value(bool) = std.atomic.Value(bool).init(false);
+
 // Dawn native instance - opaque pointer to C++ dawn::native::Instance
 // These types and externs are only available on native (non-WASM) builds.
 // On web, WebGPU is provided by the browser's navigator.gpu API.
@@ -101,6 +107,9 @@ pub const RendererError = error{
     TextureCreationFailed,
     /// Failed to create a command encoder.
     CommandEncoderCreationFailed,
+    /// The GPU device was lost (driver crash, GPU hang, sleep/wake, etc.).
+    /// The caller should deinit and reinitialize the renderer to recover.
+    DeviceLost,
 };
 
 /// Uniform buffer data for coordinate transformation.
@@ -848,6 +857,19 @@ pub const Renderer = struct {
         );
     }
 
+    /// Returns true if the GPU device was lost asynchronously (driver crash, GPU hang,
+    /// system sleep, etc.). When true, the caller should deinit the renderer and
+    /// reinitialize it to recover.
+    pub fn isDeviceLost(_: *const Self) bool {
+        return global_device_lost.load(.acquire);
+    }
+
+    /// Reset the device-lost flag. Call this after successful reinitialization
+    /// so that subsequent frames proceed normally.
+    pub fn clearDeviceLost() void {
+        global_device_lost.store(false, .release);
+    }
+
     /// Begin a new frame for rendering.
     /// Gets the current texture view from the render target and creates a command encoder.
     /// Call this once at the start of each frame before recording render commands.
@@ -860,6 +882,12 @@ pub const Renderer = struct {
     /// Note: The caller is responsible for handling resize by calling target.needsResize()
     /// and target.resize() before calling beginFrame().
     pub fn beginFrame(self: *Self, target: *RenderTarget) RendererError!FrameState {
+        // Check if the device was lost asynchronously (driver crash, GPU hang, etc.).
+        // The caller should catch DeviceLost and reinitialize the renderer.
+        if (global_device_lost.load(.acquire)) {
+            return RendererError.DeviceLost;
+        }
+
         // Clear previous frame's commands while keeping allocated memory for efficiency.
         // Each frame starts fresh with an empty command list.
         self.command_buffer.clearRetainingCapacity();
@@ -1565,14 +1593,22 @@ pub const Renderer = struct {
 
     /// Callback for WebGPU device loss events.
     /// Device loss can happen due to driver crashes, GPU hangs, or adapter removal.
-    /// Logs the reason so users can diagnose hardware/driver issues.
+    /// Sets the global device_lost flag so beginFrame() can report it to the caller.
+    /// The .destroyed reason is expected during normal shutdown (deinit) and is not
+    /// treated as an unexpected loss.
     fn deviceLostCallback(
         reason: zgpu.wgpu.DeviceLostReason,
         message: ?[*:0]const u8,
         _: ?*anyopaque,
     ) callconv(.c) void {
         const msg = message orelse "unknown reason";
-        log.err("WebGPU device lost (reason={}): {s}", .{ reason, msg });
+        if (reason == .destroyed) {
+            // Normal shutdown — device was explicitly destroyed via deinit.
+            log.info("WebGPU device destroyed (expected): {s}", .{msg});
+        } else {
+            log.err("WebGPU device lost (reason={}): {s}", .{ reason, msg });
+            global_device_lost.store(true, .release);
+        }
     }
 
     /// Callback for device request - stores the result in the response struct.
@@ -2305,8 +2341,12 @@ pub const Renderer = struct {
 
     /// Clean up renderer resources.
     /// Releases all WebGPU resources held by the renderer.
+    /// Resets the device-lost flag so a fresh init starts clean.
     pub fn deinit(self: *Self) void {
         log.debug("deinitializing renderer", .{});
+
+        // Reset device-lost flag so reinitialization starts clean.
+        global_device_lost.store(false, .release);
 
         // Free command buffer first (uses allocator, not GPU resources)
         self.command_buffer.deinit(self.allocator);
@@ -2394,6 +2434,7 @@ test "Renderer error types are defined" {
         RendererError.PipelineLayoutCreationFailed,
         RendererError.TextureCreationFailed,
         RendererError.CommandEncoderCreationFailed,
+        RendererError.DeviceLost,
     };
-    try std.testing.expectEqual(@as(usize, 13), expected_errors.len);
+    try std.testing.expectEqual(@as(usize, 14), expected_errors.len);
 }
