@@ -46,6 +46,58 @@ const VIEWPORT: Viewport = .{ .logical_width = 400.0, .logical_height = 300.0 };
 
 const log = std.log.scoped(.main);
 
+/// Hook called between endRenderPass and endFrame, receiving the command encoder.
+/// Used by headless mode to copy the rendered texture to a staging buffer
+/// before the command buffer is submitted.
+const PreSubmitHook = struct {
+    context: *anyopaque,
+    callback: *const fn (context: *anyopaque, encoder: zgpu.wgpu.CommandEncoder) void,
+
+    fn call(self: PreSubmitHook, encoder: zgpu.wgpu.CommandEncoder) void {
+        self.callback(self.context, encoder);
+    }
+};
+
+/// Execute one frame of the update/render/present pipeline.
+///
+/// This is the single source of truth for the frame lifecycle. All backends
+/// (desktop, headless, web) call this instead of duplicating the pipeline.
+///
+/// The optional `pre_submit_hook` is called after endRenderPass but before
+/// endFrame, allowing the caller to record additional GPU commands (e.g.,
+/// copying the rendered texture to a staging buffer for CPU readback).
+fn runFrame(
+    app: *App,
+    renderer: *Renderer,
+    render_target: *renderer_mod.RenderTarget,
+    pre_submit_hook: ?PreSubmitHook,
+) void {
+    const frame_state = renderer.beginFrame(render_target) catch |err| {
+        if (err != renderer_mod.RendererError.BeginFrameFailed) {
+            log.warn("beginFrame failed: {}", .{err});
+        }
+        return;
+    };
+
+    // Set logical viewport dimensions so the shader maps logical coords to NDC.
+    // This decouples drawing code from physical resolution.
+    renderer.setLogicalSize(VIEWPORT.logical_width, VIEWPORT.logical_height);
+
+    const render_pass = Renderer.beginRenderPass(frame_state, Renderer.cornflower_blue);
+    var canvas = Canvas.init(renderer, VIEWPORT);
+    app.render(&canvas);
+    renderer.flushBatch(render_pass);
+    Renderer.endRenderPass(render_pass);
+
+    // Allow caller to record commands before the command buffer is submitted
+    // (e.g., headless staging buffer copy).
+    if (pre_submit_hook) |hook| {
+        hook.call(frame_state.command_encoder);
+    }
+
+    renderer.endFrame(frame_state, render_target);
+}
+
 /// Configure logging level and custom log function for WASM.
 /// Set to .debug for verbose output, .info for normal, .warn or .err for quieter output.
 pub const std_options: std.Options = .{
@@ -372,23 +424,7 @@ fn runWindowedImpl(config: Config) void {
             continue;
         }
 
-        const frame_state = renderer.beginFrame(render_target) catch |err| {
-            if (err != renderer_mod.RendererError.BeginFrameFailed) {
-                log.warn("beginFrame failed: {}", .{err});
-            }
-            continue;
-        };
-
-        // Set logical viewport dimensions so the shader maps logical coords to NDC.
-        // This decouples drawing code from physical resolution.
-        renderer.setLogicalSize(VIEWPORT.logical_width, VIEWPORT.logical_height);
-
-        const render_pass = Renderer.beginRenderPass(frame_state, Renderer.cornflower_blue);
-        var canvas = Canvas.init(&renderer, VIEWPORT);
-        app.render(&canvas);
-        renderer.flushBatch(render_pass);
-        Renderer.endRenderPass(render_pass);
-        renderer.endFrame(frame_state, render_target);
+        runFrame(&app, &renderer, render_target, null);
 
         // Check if App wants to take a screenshot after this frame
         if (app.shouldTakeScreenshot()) |filename| {
@@ -451,25 +487,19 @@ fn runHeadless(config: Config) void {
         const mouse_state = plat.getMouseState();
         app.update(delta_time, mouse_state);
 
-        const frame_state = renderer.beginFrame(render_target) catch |err| {
-            log.err("headless beginFrame failed: {}", .{err});
-            return;
+        // Use pre-submit hook to copy rendered texture to staging buffer
+        // for CPU readback. This must happen after rendering but before
+        // the command buffer is submitted.
+        const hook: PreSubmitHook = .{
+            .context = @ptrCast(&offscreen_target),
+            .callback = &struct {
+                fn cb(ctx: *anyopaque, encoder: zgpu.wgpu.CommandEncoder) void {
+                    const target: *OffscreenRenderTarget = @ptrCast(@alignCast(ctx));
+                    target.copyToStagingBuffer(encoder);
+                }
+            }.cb,
         };
-
-        // Set logical viewport dimensions so the shader maps logical coords to NDC.
-        renderer.setLogicalSize(VIEWPORT.logical_width, VIEWPORT.logical_height);
-
-        const render_pass = Renderer.beginRenderPass(frame_state, Renderer.cornflower_blue);
-        var canvas = Canvas.init(&renderer, VIEWPORT);
-        app.render(&canvas);
-        renderer.flushBatch(render_pass);
-        Renderer.endRenderPass(render_pass);
-
-        // Copy rendered texture to staging buffer for CPU readback.
-        // This must be done after rendering but before the command buffer is submitted.
-        offscreen_target.copyToStagingBuffer(frame_state.command_encoder);
-
-        renderer.endFrame(frame_state, render_target);
+        runFrame(&app, &renderer, render_target, hook);
 
         frame_count += 1;
         log.info("headless frame {} rendered successfully", .{frame_count});
@@ -559,27 +589,8 @@ const wasm_exports = if (is_wasm) struct {
         // Render frame if renderer and render target are available.
         // On web, WebGPU initialization is asynchronous so renderer may be null initially.
         if (state.renderer) |renderer| {
-            if (state.render_target) |render_target| {
-                // Begin frame
-                const frame_state = renderer.beginFrame(render_target) catch |err| {
-                    if (err != renderer_mod.RendererError.BeginFrameFailed) {
-                        log.warn("web beginFrame failed: {}", .{err});
-                    }
-                    return;
-                };
-
-                // Set logical viewport dimensions so the shader maps logical coords to NDC.
-                renderer.setLogicalSize(VIEWPORT.logical_width, VIEWPORT.logical_height);
-
-                // Render: clear, draw app content, flush batch
-                const render_pass = Renderer.beginRenderPass(frame_state, Renderer.cornflower_blue);
-                var canvas = Canvas.init(renderer, VIEWPORT);
-                state.app.render(&canvas);
-                renderer.flushBatch(render_pass);
-                Renderer.endRenderPass(render_pass);
-
-                // End frame and present
-                renderer.endFrame(frame_state, render_target);
+            if (state.render_target) |rt| {
+                runFrame(state.app, renderer, rt, null);
             }
         }
 
