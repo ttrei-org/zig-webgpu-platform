@@ -2700,15 +2700,18 @@ pub const Renderer = struct {
     }
 };
 
-test "Renderer init and deinit" {
-    // Renderer.init() now requires actual WebGPU hardware, which may not
-    // be available in all test environments. We test that the error types
-    // are properly defined instead.
-    _ = RendererError.InstanceCreationFailed;
-    _ = RendererError.AdapterRequestFailed;
-    _ = RendererError.DeviceRequestFailed;
-    _ = RendererError.SurfaceCreationFailed;
-    _ = RendererError.SwapChainCreationFailed;
-    _ = RendererError.ShaderCompilationFailed;
-    _ = RendererError.PipelineCreationFailed;
+test "Renderer error types are defined" {
+    // Renderer.init() requires actual WebGPU hardware, which may not
+    // be available in all test environments. We verify that the error
+    // set contains the expected members by converting to anyerror.
+    const expected_errors = [_]anyerror{
+        RendererError.InstanceCreationFailed,
+        RendererError.AdapterRequestFailed,
+        RendererError.DeviceRequestFailed,
+        RendererError.SurfaceCreationFailed,
+        RendererError.SwapChainCreationFailed,
+        RendererError.ShaderCompilationFailed,
+        RendererError.PipelineCreationFailed,
+    };
+    try std.testing.expectEqual(@as(usize, 7), expected_errors.len);
 }

@@ -159,12 +159,20 @@ pub fn build(b: *std.Build) void {
     run_step.dependOn(&run_cmd.step);
 
     const test_step = b.step("test", "Run unit tests");
+    const test_module = b.createModule(.{
+        .root_source_file = b.path("src/main.zig"),
+        .target = target,
+        .optimize = optimize,
+    });
+    // Tests need the same imports as the main executable so that transitive
+    // imports (e.g. canvas -> renderer -> zgpu) resolve correctly.
+    test_module.addImport("zgpu", zgpu_module);
+    test_module.addImport("zigimg", zigimg_dep.module("zigimg"));
+    if (zglfw_dep) |dep| {
+        test_module.addImport("zglfw", dep.module("root"));
+    }
     const exe_tests = b.addTest(.{
-        .root_module = b.createModule(.{
-            .root_source_file = b.path("src/main.zig"),
-            .target = target,
-            .optimize = optimize,
-        }),
+        .root_module = test_module,
     });
     test_step.dependOn(&b.addRunArtifact(exe_tests).step);
 

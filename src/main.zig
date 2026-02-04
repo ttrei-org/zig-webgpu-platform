@@ -670,3 +670,8 @@ pub const _start = if (is_wasm) wasmStart else {};
 fn wasmStart() callconv(.c) void {
     // No-op stub. Browser calls wasm_main directly via JavaScript.
 }
+
+// Pull in tests from modules that aren't transitively imported by the main code paths.
+test {
+    _ = @import("canvas.zig");
+}
