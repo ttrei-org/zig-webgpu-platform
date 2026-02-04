@@ -13,10 +13,10 @@ const MouseState = platform_mod.MouseState;
 
 const renderer_mod = @import("renderer.zig");
 const Renderer = renderer_mod.Renderer;
-const Color = renderer_mod.Color;
 
 const canvas_mod = @import("canvas.zig");
 const Canvas = canvas_mod.Canvas;
+const Color = canvas_mod.Color;
 
 const log = std.log.scoped(.app);
 

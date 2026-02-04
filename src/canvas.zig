@@ -6,9 +6,10 @@
 
 const std = @import("std");
 const renderer_mod = @import("renderer.zig");
+const color_mod = @import("color.zig");
 
 pub const Renderer = renderer_mod.Renderer;
-pub const Color = renderer_mod.Color;
+pub const Color = color_mod.Color;
 
 /// Defines a logical coordinate space for drawing, decoupling App drawing
 /// code from physical pixel dimensions. The shader transforms logical
@@ -288,8 +289,10 @@ test "fillRect solid color delegates to fillRectGradient" {
 }
 
 test "Color re-export matches renderer Color" {
-    // Verify the re-exported Color type is identical to the renderer's Color.
+    // Verify the re-exported Color type is identical to the renderer's Color
+    // (both resolve to color_mod.Color).
     try std.testing.expect(Color == renderer_mod.Color);
+    try std.testing.expect(Color == color_mod.Color);
 }
 
 test "fillCircle signature" {
