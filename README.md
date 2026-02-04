@@ -13,38 +13,16 @@ zig build run
 
 ### Web (WASM)
 
-**Note**: The web build requires the Emscripten SDK to be installed. See [Prerequisites](#web-build-prerequisites) below.
-
 ```bash
 zig build -Dtarget=wasm32-emscripten
 ```
+
+No additional dependencies are needed — the Emscripten SDK is **not** required. The project uses custom Zig bindings and a hand-written JavaScript runtime (`web/wasm_bindings.js`) instead of `emcc` or `std.os.emscripten`.
 
 This produces output in `zig-out/web/` including:
 - `bin/zig_gui_experiment.wasm` - The compiled WebAssembly module
 - `zig_gui_experiment.js` - JavaScript glue code
 - `index.html` - Web page that loads and runs the WASM
-
-#### Web Build Prerequisites
-
-The web build targets `wasm32-emscripten` which requires the Emscripten SDK:
-
-1. **Install Emscripten SDK**:
-   ```bash
-   git clone https://github.com/emscripten-core/emsdk.git
-   cd emsdk
-   ./emsdk install latest
-   ./emsdk activate latest
-   source ./emsdk_env.sh
-   ```
-
-2. **Verify installation**:
-   ```bash
-   emcc --version
-   ```
-
-The `std.os.emscripten` module in Zig requires Emscripten's libc implementation. Without the SDK installed, the build will fail with errors like "dependency on libc must be explicitly specified" or "unable to provide libc for target".
-
-**Current Status**: The web build infrastructure (JavaScript glue, HTML loader) is in place, but requires Emscripten SDK installation to compile. Native builds work without any additional dependencies.
 
 ## Running the Web Build
 
