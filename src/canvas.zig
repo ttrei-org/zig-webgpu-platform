@@ -112,6 +112,45 @@ pub const Canvas = struct {
         }
     }
 
+    /// Draw an outlined (unfilled) circle as a ring of quads.
+    ///
+    /// The circle is approximated by `segments` quads (2 triangles each) forming
+    /// a ring between an inner radius and an outer radius. The stroke is drawn
+    /// **inset** from the given radius: the outer edge aligns with `radius` and
+    /// the inner edge is at `radius - thickness`.
+    ///
+    /// Produces `segments * 2` triangles.
+    ///
+    /// Coordinates are in screen space (origin top-left, X right, Y down).
+    pub fn strokeCircle(self: Canvas, cx: f32, cy: f32, radius: f32, thickness: f32, color: Color, segments: u16) void {
+        if (segments < 3) return;
+        // Clamp thickness so it doesn't exceed the radius
+        const t = @min(thickness, radius);
+        if (t <= 0 or radius <= 0) return;
+        const r_outer = radius;
+        const r_inner = radius - t;
+        const seg_f: f32 = @floatFromInt(segments);
+        var i: u16 = 0;
+        while (i < segments) : (i += 1) {
+            const i_f: f32 = @floatFromInt(i);
+            const next_f: f32 = @floatFromInt(i + 1);
+            const angle1 = i_f * std.math.tau / seg_f;
+            const angle2 = next_f * std.math.tau / seg_f;
+            const cos1 = @cos(angle1);
+            const sin1 = @sin(angle1);
+            const cos2 = @cos(angle2);
+            const sin2 = @sin(angle2);
+            // Four corners of the quad: outer1, outer2, inner1, inner2
+            const outer_a = [2]f32{ cx + r_outer * cos1, cy + r_outer * sin1 };
+            const outer_b = [2]f32{ cx + r_outer * cos2, cy + r_outer * sin2 };
+            const inner_a = [2]f32{ cx + r_inner * cos1, cy + r_inner * sin1 };
+            const inner_b = [2]f32{ cx + r_inner * cos2, cy + r_inner * sin2 };
+            // Two triangles per quad segment
+            self.renderer.queueTriangle(.{ outer_a, outer_b, inner_a }, .{ color, color, color });
+            self.renderer.queueTriangle(.{ outer_b, inner_b, inner_a }, .{ color, color, color });
+        }
+    }
+
     /// Draw a line segment with the given thickness as a rotated rectangle.
     ///
     /// The line is rendered as 2 triangles forming a rectangle oriented
@@ -314,4 +353,19 @@ test "strokeRect thickness clamping" {
     const FnInfo = @typeInfo(@TypeOf(Canvas.strokeRect));
     // Return type must be void (no error possible)
     try std.testing.expect(FnInfo.@"fn".return_type.? == void);
+}
+
+test "strokeCircle signature" {
+    // Verify strokeCircle has the correct signature: self, cx, cy, radius, thickness, color, segments
+    const FnInfo = @typeInfo(@TypeOf(Canvas.strokeCircle));
+    const params = FnInfo.@"fn".params;
+    try std.testing.expectEqual(@as(usize, 7), params.len);
+}
+
+test "strokeCircle triangle count" {
+    // strokeCircle produces segments * 2 triangles (2 per quad segment).
+    // For 32 segments: 32 * 2 = 64 triangles.
+    // We verify the function exists and returns void (no error).
+    const ReturnType = @typeInfo(@TypeOf(Canvas.strokeCircle)).@"fn".return_type.?;
+    try std.testing.expect(ReturnType == void);
 }

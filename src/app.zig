@@ -247,7 +247,7 @@ pub const App = struct {
     /// - canvas: Pointer to the Canvas for drawing shapes.
     pub fn render(self: *const Self, canvas: *Canvas) void {
         // Demo scene showcasing all Canvas primitives: fillRect, fillRectGradient,
-        // fillCircle, fillTriangle, drawLine, fillPolygon.
+        // fillCircle, strokeCircle, fillTriangle, drawLine, fillPolygon.
         // All positions use viewport dimensions for resolution independence.
 
         const vp_w = canvas.viewport.logical_width;
@@ -282,6 +282,8 @@ pub const App = struct {
         canvas.fillCircle(vp_w * 0.82, vp_h * 0.12, 28.0, Color.fromHex(0xFFD54F), 24);
         // Outer glow ring (slightly larger, more transparent orange)
         canvas.fillCircle(vp_w * 0.82, vp_h * 0.12, 34.0, Color.rgba(1.0, 0.85, 0.3, 0.25), 24);
+        // Solar ring (strokeCircle demo — crisp outline around the sun)
+        canvas.strokeCircle(vp_w * 0.82, vp_h * 0.12, 42.0, 2.0, Color.fromHex(0xFFA000), 32);
 
         // -- House --
         const house_x = vp_w * 0.22;
