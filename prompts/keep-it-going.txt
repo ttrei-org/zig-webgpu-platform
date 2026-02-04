@@ -1,6 +1,0 @@
-Read @AGENTS.md
-take the highest-impact bead from "br ready" and implement it.
-Zig build must work afterwards for all supported targets.
-Verify the output by analyzing a screenshot of the rendering result.
-Compare screenshots of both native and web output to detect any divergence.
-Commit your changes.
