@@ -706,8 +706,8 @@ pub const Renderer = struct {
         });
         log.debug("pipeline layout created with bind group layout in slot 0", .{});
 
-        // Create render pipeline for triangle rendering (uses RGBA format for headless)
-        const render_pipeline = createRenderPipelineHeadless(device, pipeline_layout, shader_module) orelse {
+        // Create render pipeline for triangle rendering (uses BGRA format, same as all backends)
+        const render_pipeline = createRenderPipeline(device, pipeline_layout, shader_module) orelse {
             log.err("failed to create render pipeline", .{});
             pipeline_layout.release();
             shader_module.release();
@@ -1481,73 +1481,6 @@ pub const Renderer = struct {
         return pipeline;
     }
 
-    /// Create the render pipeline for headless (offscreen) rendering.
-    /// Uses RGBA8Unorm format to match OffscreenRenderTarget texture format.
-    /// Returns null if pipeline creation fails.
-    fn createRenderPipelineHeadless(
-        device: zgpu.wgpu.Device,
-        pipeline_layout: zgpu.wgpu.PipelineLayout,
-        shader_module: zgpu.wgpu.ShaderModule,
-    ) ?zgpu.wgpu.RenderPipeline {
-        // Color target state for RGBA8Unorm output (matches offscreen texture format)
-        const color_target: zgpu.wgpu.ColorTargetState = .{
-            .next_in_chain = null,
-            .format = .rgba8_unorm, // RGBA for offscreen rendering
-            .blend = &alpha_blend_state,
-            .write_mask = .{ .red = true, .green = true, .blue = true, .alpha = true },
-        };
-
-        // Fragment state with fs_main entry point
-        const fragment_state: zgpu.wgpu.FragmentState = .{
-            .next_in_chain = null,
-            .module = shader_module,
-            .entry_point = "fs_main",
-            .constant_count = 0,
-            .constants = null,
-            .target_count = 1,
-            .targets = @ptrCast(&color_target),
-        };
-
-        // Create the render pipeline
-        const pipeline = device.createRenderPipeline(.{
-            .next_in_chain = null,
-            .label = "Headless Triangle Render Pipeline",
-            .layout = pipeline_layout,
-            .vertex = .{
-                .next_in_chain = null,
-                .module = shader_module,
-                .entry_point = "vs_main",
-                .constant_count = 0,
-                .constants = null,
-                .buffer_count = 1,
-                .buffers = @ptrCast(&vertex_buffer_layout),
-            },
-            .primitive = .{
-                .next_in_chain = null,
-                .topology = .triangle_list,
-                .strip_index_format = .undef,
-                .front_face = .ccw,
-                .cull_mode = .none,
-            },
-            .depth_stencil = null,
-            .multisample = .{
-                .next_in_chain = null,
-                .count = 1,
-                .mask = 0xFFFFFFFF,
-                .alpha_to_coverage_enabled = false,
-            },
-            .fragment = &fragment_state,
-        });
-
-        if (@intFromPtr(pipeline) == 0) {
-            log.err("headless render pipeline creation returned null", .{});
-            return null;
-        }
-
-        log.info("headless render pipeline created successfully", .{});
-        return pipeline;
-    }
-
     /// Create a dynamic vertex buffer with maximum capacity.
     /// The buffer is reused each frame - vertices are uploaded via queue.writeBuffer().
     /// Usage: VERTEX (for binding as vertex buffer) | COPY_DST (for dynamic updates).
@@ -2311,8 +2244,8 @@ pub const Renderer = struct {
         // This confirms the GPU->CPU data path works correctly.
         verifyPixelData(mapped_data, width, height, aligned_bytes_per_row);
 
-        // Write to PNG file - offscreen uses RGBA format (not BGRA)
-        self.writePngFileRgba(filename, mapped_data, width, height, aligned_bytes_per_row) catch |err| {
+        // Write to PNG file - offscreen now uses BGRA format (same as all backends)
+        self.writePngFile(filename, mapped_data, width, height, aligned_bytes_per_row) catch |err| {
             log.err("failed to write offscreen PNG file: {}", .{err});
             staging_buffer.unmap();
             return RendererError.ScreenshotFailed;
@@ -2334,7 +2267,8 @@ pub const Renderer = struct {
         log.info("image dimensions: {}x{}, row stride: {} bytes", .{ width, height, aligned_bytes_per_row });
         log.info("total buffer size: {} bytes", .{data.len});
 
-        // Helper to read a pixel at (x, y) - returns RGBA tuple
+        // Helper to read a pixel at (x, y) - returns RGBA tuple from BGRA layout
+        // All backends now use BGRA format: byte 0=B, 1=G, 2=R, 3=A
         const getPixel = struct {
             fn get(pixel_data: []const u8, x: u32, y: u32, stride: u32) struct { r: u8, g: u8, b: u8, a: u8 } {
                 const offset = @as(usize, y) * @as(usize, stride) + @as(usize, x) * 4;
@@ -2342,10 +2276,10 @@ pub const Renderer = struct {
                     return .{ .r = 0, .g = 0, .b = 0, .a = 0 };
                 }
                 return .{
-                    .r = pixel_data[offset],
-                    .g = pixel_data[offset + 1],
-                    .b = pixel_data[offset + 2],
-                    .a = pixel_data[offset + 3],
+                    .r = pixel_data[offset + 2], // R is at BGRA offset 2
+                    .g = pixel_data[offset + 1], // G is at BGRA offset 1
+                    .b = pixel_data[offset + 0], // B is at BGRA offset 0
+                    .a = pixel_data[offset + 3], // A is at BGRA offset 3
                 };
             }
         }.get;
@@ -2490,67 +2424,6 @@ pub const Renderer = struct {
                     .g = data[src_pixel + 1], // G from BGRA offset 1
                     .b = data[src_pixel + 0], // B from BGRA offset 0
                     .a = data[src_pixel + 3], // A from BGRA offset 3
-                };
-            }
-        }
-
-        // Create zigimg Image from pixel data
-        var image: zigimg.Image = .{
-            .width = width,
-            .height = height,
-            .pixels = .{ .rgba32 = rgba_pixels },
-            .animation = .{},
-        };
-
-        // Write PNG file to disk with error handling
-        var write_buffer: [1024 * 1024]u8 = undefined;
-        image.writeToFilePath(allocator, filename, &write_buffer, .{ .png = .{} }) catch |err| {
-            logPngWriteError(err, filename);
-            return err;
-        };
-
-        // Log success with file path and size
-        const file_size = getFileSize(filename);
-        log.info("PNG file written: {s} ({} bytes, {}x{} pixels)", .{ filename, file_size, width, height });
-    }
-
-    /// Write pixel data to a PNG file using zigimg.
-    /// Data is already in RGBA format (from offscreen render target).
-    ///
-    /// Handles common file I/O errors with user-friendly messages:
-    /// - Directory doesn't exist (FileNotFound)
-    /// - Permission denied (AccessDenied, PermissionDenied)
-    /// - Disk full (NoSpaceLeft, DiskQuota)
-    ///
-    /// Logs success with file path and size.
-    fn writePngFileRgba(
-        self: *Self,
-        filename: []const u8,
-        data: []const u8,
-        width: u32,
-        height: u32,
-        aligned_bytes_per_row: u32,
-    ) !void {
-        _ = self;
-
-        const allocator = std.heap.page_allocator;
-
-        // Create RGBA pixel data (already RGBA, just need to handle row alignment)
-        const pixel_count = @as(usize, width) * @as(usize, height);
-        var rgba_pixels = try allocator.alloc(zigimg.color.Rgba32, pixel_count);
-        defer allocator.free(rgba_pixels);
-
-        // Copy RGBA data, handling row alignment
-        for (0..height) |y| {
-            const src_row_offset = y * aligned_bytes_per_row;
-            for (0..width) |x| {
-                const src_pixel = src_row_offset + x * 4;
-                const dst_idx = y * width + x;
-                rgba_pixels[dst_idx] = .{
-                    .r = data[src_pixel + 0], // R
-                    .g = data[src_pixel + 1], // G
-                    .b = data[src_pixel + 2], // B
-                    .a = data[src_pixel + 3], // A
                 };
             }
         }

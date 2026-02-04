@@ -708,7 +708,7 @@ pub const OffscreenRenderTarget = struct {
                 .height = height,
                 .depth_or_array_layers = 1,
             },
-            .format = .rgba8_unorm, // RGBA for easy PNG export
+            .format = .bgra8_unorm, // BGRA to match all backends (desktop, web, headless)
             .mip_level_count = 1,
             .sample_count = 1,
             .view_format_count = 0,
@@ -721,7 +721,7 @@ pub const OffscreenRenderTarget = struct {
         return texture.createView(.{
             .next_in_chain = null,
             .label = "Offscreen Render Target View",
-            .format = .rgba8_unorm,
+            .format = .bgra8_unorm,
             .dimension = .tvdim_2d,
             .base_mip_level = 0,
             .mip_level_count = 1,
