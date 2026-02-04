@@ -373,13 +373,13 @@ pub const Renderer = struct {
     /// Only present on native builds; web builds use browser-provided WebGPU.
     native_instance: DawnNativeInstance = if (is_native) null else {},
     /// WebGPU instance handle - entry point for the WebGPU API.
-    instance: ?zgpu.wgpu.Instance,
+    instance: zgpu.wgpu.Instance,
     /// WebGPU adapter representing a physical GPU.
-    adapter: ?zgpu.wgpu.Adapter,
+    adapter: zgpu.wgpu.Adapter,
     /// WebGPU device handle for creating GPU resources.
-    device: ?zgpu.wgpu.Device,
+    device: zgpu.wgpu.Device,
     /// Command queue for submitting work to the GPU.
-    queue: ?zgpu.wgpu.Queue,
+    queue: zgpu.wgpu.Queue,
     /// Window surface for presenting rendered frames.
     surface: ?zgpu.wgpu.Surface,
     /// Swap chain for presenting rendered frames to the window surface.
@@ -391,32 +391,32 @@ pub const Renderer = struct {
     /// Current swap chain dimensions for resize detection.
     swapchain_height: u32,
     /// Compiled WGSL shader module for triangle rendering.
-    shader_module: ?zgpu.wgpu.ShaderModule,
+    shader_module: zgpu.wgpu.ShaderModule,
     /// Bind group layout describing the uniform buffer binding.
     /// Defines the interface between Zig code and shader for screen dimensions.
     /// Layout: binding 0, visibility VERTEX, buffer type Uniform.
-    bind_group_layout: ?zgpu.wgpu.BindGroupLayout,
+    bind_group_layout: zgpu.wgpu.BindGroupLayout,
     /// Pipeline layout defining resource bindings for the render pipeline.
     /// Contains bind_group_layout for uniform buffer access in shaders.
-    pipeline_layout: ?zgpu.wgpu.PipelineLayout,
+    pipeline_layout: zgpu.wgpu.PipelineLayout,
     /// Render pipeline for triangle rendering.
     /// Combines shader stages, vertex layout, and output format configuration.
-    render_pipeline: ?zgpu.wgpu.RenderPipeline,
+    render_pipeline: zgpu.wgpu.RenderPipeline,
     /// Dynamic vertex buffer for triangle rendering.
     /// Holds up to max_vertex_capacity vertices, reused each frame via queue.writeBuffer().
     /// Size = max_vertex_capacity * @sizeOf(Vertex) = 10000 * 20 = 200KB.
-    vertex_buffer: ?zgpu.wgpu.Buffer,
+    vertex_buffer: zgpu.wgpu.Buffer,
     /// Maximum number of vertices the buffer can hold.
     /// Set to 10,000 vertices (~200KB) for efficient batched rendering.
     vertex_buffer_capacity: u32,
     /// Uniform buffer for screen dimensions.
     /// Holds the Uniforms struct (8 bytes data, 16 bytes allocated for GPU alignment).
     /// Updated each frame or on resize via queue.writeBuffer().
-    uniform_buffer: ?zgpu.wgpu.Buffer,
+    uniform_buffer: zgpu.wgpu.Buffer,
     /// Bind group containing the uniform buffer binding.
     /// Makes the uniform data (screen dimensions) available to the shader during rendering.
     /// Set during render pass to connect the uniform buffer to shader binding 0.
-    bind_group: ?zgpu.wgpu.BindGroup,
+    bind_group: zgpu.wgpu.BindGroup,
     /// Texture for screenshot capture.
     /// Created with copy_src usage to allow copying to a staging buffer.
     /// Matches swap chain dimensions and is recreated on resize.
@@ -442,16 +442,28 @@ pub const Renderer = struct {
         }
     }.init;
 
+    /// Shared GPU resources returned by initSharedResources.
+    /// All fields are always valid after successful initialization.
+    const SharedResources = struct {
+        shader_module: zgpu.wgpu.ShaderModule,
+        bind_group_layout: zgpu.wgpu.BindGroupLayout,
+        pipeline_layout: zgpu.wgpu.PipelineLayout,
+        render_pipeline: zgpu.wgpu.RenderPipeline,
+        vertex_buffer: zgpu.wgpu.Buffer,
+        vertex_buffer_capacity: u32,
+        uniform_buffer: zgpu.wgpu.Buffer,
+        bind_group: zgpu.wgpu.BindGroup,
+    };
+
     /// Initialize shared GPU resources (shader, pipeline, buffers, bind group).
     /// Called by all three init paths after they obtain a device and queue.
     /// On error, releases any resources created so far within this function.
     fn initSharedResources(
-        self: *Self,
         device: zgpu.wgpu.Device,
         queue: zgpu.wgpu.Queue,
         width: u32,
         height: u32,
-    ) RendererError!void {
+    ) RendererError!SharedResources {
         // Create shader module from embedded WGSL source
         const shader_module = createShaderModule(device) orelse {
             log.err("failed to create shader module", .{});
@@ -480,8 +492,8 @@ pub const Renderer = struct {
             log.err("failed to create render pipeline", .{});
             return RendererError.PipelineCreationFailed;
         };
-        // No errdefer needed for render_pipeline - it's assigned to self below,
-        // and if we reach this point, remaining operations are infallible.
+        // No errdefer needed for render_pipeline - it's the last failable operation,
+        // and remaining operations below are infallible.
 
         // Create dynamic vertex buffer
         const vertex_result = createVertexBuffer(device);
@@ -505,15 +517,16 @@ pub const Renderer = struct {
         const bind_group = createBindGroup(device, bind_group_layout, uniform_buffer);
         log.info("bind group created with uniform buffer", .{});
 
-        // Assign all shared resources to self
-        self.shader_module = shader_module;
-        self.bind_group_layout = bind_group_layout;
-        self.pipeline_layout = pipeline_layout;
-        self.render_pipeline = render_pipeline;
-        self.vertex_buffer = vertex_result.buffer;
-        self.vertex_buffer_capacity = vertex_result.capacity;
-        self.uniform_buffer = uniform_buffer;
-        self.bind_group = bind_group;
+        return .{
+            .shader_module = shader_module,
+            .bind_group_layout = bind_group_layout,
+            .pipeline_layout = pipeline_layout,
+            .render_pipeline = render_pipeline,
+            .vertex_buffer = vertex_result.buffer,
+            .vertex_buffer_capacity = vertex_result.capacity,
+            .uniform_buffer = uniform_buffer,
+            .bind_group = bind_group,
+        };
     }
 
     fn initNativeImpl(allocator: std.mem.Allocator, window: *zglfw.Window, width: u32, height: u32) RendererError!Self {
@@ -592,9 +605,20 @@ pub const Renderer = struct {
         );
         log.info("WebGPU swap chain created: {}x{}", .{ width, height });
 
-        // Build the result struct with backend-specific fields, then
-        // initialize shared GPU resources (shader, pipeline, buffers, bind group).
-        var self: Self = .{
+        // Initialize shared GPU resources (shader, pipeline, buffers, bind group).
+        const shared = initSharedResources(device, queue, width, height) catch |err| {
+            // Release backend-specific resources on shared init failure
+            swapchain.release();
+            queue.release();
+            device.release();
+            adapter.release();
+            surface.release();
+            instance.release();
+            dniDestroy(native_instance);
+            return err;
+        };
+
+        return .{
             .allocator = allocator,
             .command_buffer = .empty,
             .native_instance = native_instance,
@@ -607,35 +631,20 @@ pub const Renderer = struct {
             .window = window,
             .swapchain_width = width,
             .swapchain_height = height,
-            // Shared resources initialized below by initSharedResources
-            .shader_module = null,
-            .bind_group_layout = null,
-            .pipeline_layout = null,
-            .render_pipeline = null,
-            .vertex_buffer = null,
-            .vertex_buffer_capacity = 0,
-            .uniform_buffer = null,
-            .bind_group = null,
+            .shader_module = shared.shader_module,
+            .bind_group_layout = shared.bind_group_layout,
+            .pipeline_layout = shared.pipeline_layout,
+            .render_pipeline = shared.render_pipeline,
+            .vertex_buffer = shared.vertex_buffer,
+            .vertex_buffer_capacity = shared.vertex_buffer_capacity,
+            .uniform_buffer = shared.uniform_buffer,
+            .bind_group = shared.bind_group,
             // Screenshot resources are created lazily on first capture
             .screenshot_texture = null,
             .screenshot_staging_buffer = null,
             .screenshot_width = 0,
             .screenshot_height = 0,
         };
-
-        self.initSharedResources(device, queue, width, height) catch |err| {
-            // Release backend-specific resources on shared init failure
-            swapchain.release();
-            queue.release();
-            device.release();
-            adapter.release();
-            surface.release();
-            instance.release();
-            dniDestroy(native_instance);
-            return err;
-        };
-
-        return self;
     }
 
     /// Initialize the renderer for headless (offscreen) rendering (native only).
@@ -704,9 +713,20 @@ pub const Renderer = struct {
         const queue = device.getQueue();
         log.debug("WebGPU queue obtained", .{});
 
-        // Build the result struct with backend-specific fields, then
-        // initialize shared GPU resources (shader, pipeline, buffers, bind group).
-        var self: Self = .{
+        // Initialize shared GPU resources (shader, pipeline, buffers, bind group).
+        const shared = initSharedResources(device, queue, width, height) catch |err| {
+            // Release backend-specific resources on shared init failure
+            queue.release();
+            device.release();
+            adapter.release();
+            instance.release();
+            dniDestroy(native_instance);
+            return err;
+        };
+
+        log.info("headless renderer initialization complete", .{});
+
+        return .{
             .allocator = allocator,
             .command_buffer = .empty,
             .native_instance = native_instance,
@@ -719,34 +739,19 @@ pub const Renderer = struct {
             .window = null, // No window in headless mode
             .swapchain_width = width,
             .swapchain_height = height,
-            // Shared resources initialized below by initSharedResources
-            .shader_module = null,
-            .bind_group_layout = null,
-            .pipeline_layout = null,
-            .render_pipeline = null,
-            .vertex_buffer = null,
-            .vertex_buffer_capacity = 0,
-            .uniform_buffer = null,
-            .bind_group = null,
+            .shader_module = shared.shader_module,
+            .bind_group_layout = shared.bind_group_layout,
+            .pipeline_layout = shared.pipeline_layout,
+            .render_pipeline = shared.render_pipeline,
+            .vertex_buffer = shared.vertex_buffer,
+            .vertex_buffer_capacity = shared.vertex_buffer_capacity,
+            .uniform_buffer = shared.uniform_buffer,
+            .bind_group = shared.bind_group,
             .screenshot_texture = null,
             .screenshot_staging_buffer = null,
             .screenshot_width = 0,
             .screenshot_height = 0,
         };
-
-        self.initSharedResources(device, queue, width, height) catch |err| {
-            // Release backend-specific resources on shared init failure
-            queue.release();
-            device.release();
-            adapter.release();
-            instance.release();
-            dniDestroy(native_instance);
-            return err;
-        };
-
-        log.info("headless renderer initialization complete", .{});
-
-        return self;
     }
 
     /// Initialize the renderer for web/WASM builds using browser WebGPU.
@@ -850,37 +855,8 @@ pub const Renderer = struct {
         };
         log.info("WebGPU swap chain created: {}x{}", .{ width, height });
 
-        // Build the result struct with backend-specific fields, then
-        // initialize shared GPU resources (shader, pipeline, buffers, bind group).
-        var self: Self = .{
-            .allocator = allocator,
-            .command_buffer = .empty,
-            // No native_instance on web - browser provides WebGPU
-            .instance = instance,
-            .adapter = adapter,
-            .device = device,
-            .queue = queue,
-            .surface = surface,
-            .swapchain = swapchain,
-            .window = null, // No GLFW window on web
-            .swapchain_width = width,
-            .swapchain_height = height,
-            // Shared resources initialized below by initSharedResources
-            .shader_module = null,
-            .bind_group_layout = null,
-            .pipeline_layout = null,
-            .render_pipeline = null,
-            .vertex_buffer = null,
-            .vertex_buffer_capacity = 0,
-            .uniform_buffer = null,
-            .bind_group = null,
-            .screenshot_texture = null,
-            .screenshot_staging_buffer = null,
-            .screenshot_width = 0,
-            .screenshot_height = 0,
-        };
-
-        self.initSharedResources(device, queue, width, height) catch |err| {
+        // Initialize shared GPU resources (shader, pipeline, buffers, bind group).
+        const shared = initSharedResources(device, queue, width, height) catch |err| {
             // Release backend-specific resources on shared init failure
             swapchain.release();
             queue.release();
@@ -893,13 +869,38 @@ pub const Renderer = struct {
 
         log.info("web renderer initialization complete", .{});
 
-        return self;
+        return .{
+            .allocator = allocator,
+            .command_buffer = .empty,
+            // No native_instance on web - browser provides WebGPU
+            .instance = instance,
+            .adapter = adapter,
+            .device = device,
+            .queue = queue,
+            .surface = surface,
+            .swapchain = swapchain,
+            .window = null, // No GLFW window on web
+            .swapchain_width = width,
+            .swapchain_height = height,
+            .shader_module = shared.shader_module,
+            .bind_group_layout = shared.bind_group_layout,
+            .pipeline_layout = shared.pipeline_layout,
+            .render_pipeline = shared.render_pipeline,
+            .vertex_buffer = shared.vertex_buffer,
+            .vertex_buffer_capacity = shared.vertex_buffer_capacity,
+            .uniform_buffer = shared.uniform_buffer,
+            .bind_group = shared.bind_group,
+            .screenshot_texture = null,
+            .screenshot_staging_buffer = null,
+            .screenshot_width = 0,
+            .screenshot_height = 0,
+        };
     }
 
     /// Create an OffscreenRenderTarget for headless rendering.
     /// Use this instead of createSwapChainRenderTarget() in headless mode.
     pub fn createOffscreenRenderTarget(self: *Self, width: u32, height: u32) OffscreenRenderTarget {
-        return OffscreenRenderTarget.init(self.device.?, width, height);
+        return OffscreenRenderTarget.init(self.device, width, height);
     }
 
     /// Create a SwapChainRenderTarget from this renderer's swap chain.
@@ -911,7 +912,7 @@ pub const Renderer = struct {
     pub fn createSwapChainRenderTarget(self: *Self) SwapChainRenderTarget {
         return SwapChainRenderTarget.init(
             self.swapchain.?,
-            self.device.?,
+            self.device,
             self.surface.?,
             self.swapchain_width,
             self.swapchain_height,
@@ -930,11 +931,6 @@ pub const Renderer = struct {
     /// Note: The caller is responsible for handling resize by calling target.needsResize()
     /// and target.resize() before calling beginFrame().
     pub fn beginFrame(self: *Self, target: *RenderTarget) RendererError!FrameState {
-        const device = self.device orelse {
-            log.err("cannot begin frame: device not initialized", .{});
-            return RendererError.BeginFrameFailed;
-        };
-
         // Clear previous frame's commands while keeping allocated memory for efficiency.
         // Each frame starts fresh with an empty command list.
         self.command_buffer.clearRetainingCapacity();
@@ -952,17 +948,15 @@ pub const Renderer = struct {
         if (dimensions.width != self.swapchain_width or dimensions.height != self.swapchain_height) {
             self.swapchain_width = dimensions.width;
             self.swapchain_height = dimensions.height;
-            const queue = self.queue orelse return RendererError.BeginFrameFailed;
-            const uniform_buffer = self.uniform_buffer orelse return RendererError.BeginFrameFailed;
             const new_uniforms: Uniforms = .{
                 .screen_size = .{ @floatFromInt(dimensions.width), @floatFromInt(dimensions.height) },
             };
-            queue.writeBuffer(uniform_buffer, 0, Uniforms, &.{new_uniforms});
+            self.queue.writeBuffer(self.uniform_buffer, 0, Uniforms, &.{new_uniforms});
             log.debug("uniform buffer updated with screen size: {}x{}", .{ dimensions.width, dimensions.height });
         }
 
         // Create a command encoder for recording GPU commands this frame
-        const command_encoder = device.createCommandEncoder(.{
+        const command_encoder = self.device.createCommandEncoder(.{
             .next_in_chain = null,
             .label = "Frame Command Encoder",
         });
@@ -1040,36 +1034,19 @@ pub const Renderer = struct {
     /// - render_pass: Active render pass encoder to record draw commands to.
     /// - vertices: Array of exactly 3 vertices defining the triangle.
     pub fn drawTriangle(self: *Self, render_pass: zgpu.wgpu.RenderPassEncoder, vertices: *const [3]Vertex) void {
-        const render_pipeline = self.render_pipeline orelse {
-            log.warn("drawTriangle: render pipeline not initialized", .{});
-            return;
-        };
-
-        const vertex_buffer = self.vertex_buffer orelse {
-            log.warn("drawTriangle: vertex buffer not initialized", .{});
-            return;
-        };
-
-        const queue = self.queue orelse {
-            log.warn("drawTriangle: queue not initialized", .{});
-            return;
-        };
-
         // Update vertex buffer with the provided vertices.
         // This allows the app to specify different triangles each frame.
-        queue.writeBuffer(vertex_buffer, 0, Vertex, vertices);
+        self.queue.writeBuffer(self.vertex_buffer, 0, Vertex, vertices);
 
         // Set render pipeline - configures GPU to use our shader and vertex layout
-        render_pass.setPipeline(render_pipeline);
+        render_pass.setPipeline(self.render_pipeline);
 
         // Set bind group 0 (uniforms) - required by the pipeline layout
-        if (self.bind_group) |bind_group| {
-            render_pass.setBindGroup(0, bind_group, &.{});
-        }
+        render_pass.setBindGroup(0, self.bind_group, &.{});
 
         // Bind vertex buffer (slot 0, full buffer)
         const vertex_buffer_size: u64 = @sizeOf([3]Vertex);
-        render_pass.setVertexBuffer(0, vertex_buffer, 0, vertex_buffer_size);
+        render_pass.setVertexBuffer(0, self.vertex_buffer, 0, vertex_buffer_size);
 
         // Draw the triangle (3 vertices, 1 instance)
         render_pass.draw(3, 1, 0, 0);
@@ -1095,27 +1072,15 @@ pub const Renderer = struct {
             return;
         }
 
-        const render_pipeline = self.render_pipeline orelse {
-            log.warn("flushBatch: render pipeline not initialized", .{});
-            return;
-        };
-
-        const vertex_buffer = self.vertex_buffer orelse {
-            log.warn("flushBatch: vertex buffer not initialized", .{});
-            return;
-        };
-
         // Set render pipeline - configures GPU to use our shader and vertex layout
-        render_pass.setPipeline(render_pipeline);
+        render_pass.setPipeline(self.render_pipeline);
 
         // Set bind group 0 (uniforms) - required by the pipeline layout
-        if (self.bind_group) |bind_group| {
-            render_pass.setBindGroup(0, bind_group, &.{});
-        }
+        render_pass.setBindGroup(0, self.bind_group, &.{});
 
         // Bind vertex buffer with the exact size needed for all vertices
         const vertex_buffer_size: u64 = @as(u64, vertex_count) * @sizeOf(Vertex);
-        render_pass.setVertexBuffer(0, vertex_buffer, 0, vertex_buffer_size);
+        render_pass.setVertexBuffer(0, self.vertex_buffer, 0, vertex_buffer_size);
 
         // Issue a single draw call for all triangles in the batch.
         // vertex_count = total_triangles * 3.
@@ -1136,18 +1101,13 @@ pub const Renderer = struct {
     /// Note: flushBatch() should be called before endRenderPass() to render
     /// any queued triangles. This function only handles frame submission.
     pub fn endFrame(self: *Self, frame_state: FrameState, target: *RenderTarget) void {
-        const queue = self.queue orelse {
-            log.err("cannot end frame: queue not initialized", .{});
-            return;
-        };
-
         // Finish the command encoder to create a command buffer
         const command_buffer = frame_state.command_encoder.finish(.{
             .label = "Frame Command Buffer",
         });
 
         // Submit the command buffer to the GPU queue
-        queue.submit(&[_]zgpu.wgpu.CommandBuffer{command_buffer});
+        self.queue.submit(&[_]zgpu.wgpu.CommandBuffer{command_buffer});
 
         // Present the frame via the render target.
         // This handles texture view release and swap chain presentation.
@@ -1157,8 +1117,7 @@ pub const Renderer = struct {
         // Tick the device to process internal Dawn work.
         // Required on some platforms (especially Linux/Vulkan) for the
         // compositor to receive and display the presented frame.
-        const device = self.device orelse return;
-        device.tick();
+        self.device.tick();
 
         log.debug("frame ended and presented", .{});
     }
@@ -1231,20 +1190,10 @@ pub const Renderer = struct {
         // Upload vertex data to GPU buffer.
         // This transfers CPU-side vertex data to GPU memory before the draw call.
         // Done once per frame with all triangles batched for efficiency.
-        const queue = self.queue orelse {
-            log.warn("cannot upload vertices: queue not initialized", .{});
-            return 0;
-        };
-
-        const vertex_buffer = self.vertex_buffer orelse {
-            log.warn("cannot upload vertices: vertex buffer not initialized", .{});
-            return 0;
-        };
-
         // Upload vertices to GPU buffer at offset 0.
         // Size = vertex_count * @sizeOf(Vertex).
         const vertex_slice = vertices[0..vertex_count];
-        queue.writeBuffer(vertex_buffer, 0, Vertex, vertex_slice);
+        self.queue.writeBuffer(self.vertex_buffer, 0, Vertex, vertex_slice);
 
         log.debug("uploaded {} vertices ({} triangles) to GPU buffer", .{ vertex_count, current_triangle });
 
@@ -1254,10 +1203,6 @@ pub const Renderer = struct {
     /// Recreate the swap chain with new dimensions.
     /// Called internally when window resize is detected.
     fn recreateSwapChain(self: *Self, width: u32, height: u32) RendererError!void {
-        const device = self.device orelse {
-            return RendererError.SwapChainCreationFailed;
-        };
-
         const surface = self.surface orelse {
             return RendererError.SwapChainCreationFailed;
         };
@@ -1268,7 +1213,7 @@ pub const Renderer = struct {
         }
 
         // Create new swap chain with updated dimensions
-        const swapchain = device.createSwapChain(
+        const swapchain = self.device.createSwapChain(
             surface,
             .{
                 .next_in_chain = null,
@@ -1287,12 +1232,10 @@ pub const Renderer = struct {
 
         // Update uniform buffer with new screen dimensions so shaders use correct NDC transform.
         // Without this, the triangle would be rendered with stale dimensions after resize.
-        const queue = self.queue orelse return RendererError.SwapChainCreationFailed;
-        const uniform_buffer = self.uniform_buffer orelse return RendererError.SwapChainCreationFailed;
         const new_uniforms: Uniforms = .{
             .screen_size = .{ @floatFromInt(width), @floatFromInt(height) },
         };
-        queue.writeBuffer(uniform_buffer, 0, Uniforms, &.{new_uniforms});
+        self.queue.writeBuffer(self.uniform_buffer, 0, Uniforms, &.{new_uniforms});
 
         log.info("swap chain recreated: {}x{}", .{ width, height });
     }
@@ -1831,7 +1774,6 @@ pub const Renderer = struct {
     /// Ensure screenshot resources exist and match current swap chain dimensions.
     /// Creates or recreates the screenshot texture and staging buffer if needed.
     fn ensureScreenshotResources(self: *Self) void {
-        const device = self.device orelse return;
         const width = self.swapchain_width;
         const height = self.swapchain_height;
 
@@ -1856,7 +1798,7 @@ pub const Renderer = struct {
         // Create screenshot texture as a render target with copy_src.
         // render_attachment: we render to this texture
         // copy_src: we copy from this texture to the staging buffer
-        self.screenshot_texture = device.createTexture(.{
+        self.screenshot_texture = self.device.createTexture(.{
             .next_in_chain = null,
             .label = "Screenshot Texture",
             .usage = .{ .render_attachment = true, .copy_src = true },
@@ -1878,7 +1820,7 @@ pub const Renderer = struct {
         const aligned_bytes_per_row = calcAlignedBytesPerRow(width);
         const buffer_size: u64 = @as(u64, aligned_bytes_per_row) * @as(u64, height);
 
-        self.screenshot_staging_buffer = device.createBuffer(.{
+        self.screenshot_staging_buffer = self.device.createBuffer(.{
             .next_in_chain = null,
             .label = "Screenshot Staging Buffer",
             .usage = .{ .map_read = true, .copy_dst = true },
@@ -1939,15 +1881,6 @@ pub const Renderer = struct {
     /// 3. Copies the texture to a staging buffer
     /// 4. Maps the buffer and writes to a PNG file
     fn takeScreenshot(self: *Self, filename: []const u8) RendererError!void {
-        const device = self.device orelse {
-            log.err("cannot take screenshot: device not initialized", .{});
-            return RendererError.ScreenshotFailed;
-        };
-
-        const queue = self.queue orelse {
-            log.err("cannot take screenshot: queue not initialized", .{});
-            return RendererError.ScreenshotFailed;
-        };
 
         // Ensure screenshot resources exist
         self.ensureScreenshotResources();
@@ -1981,7 +1914,7 @@ pub const Renderer = struct {
         defer screenshot_view.release();
 
         // Create a command encoder for rendering and copy operations
-        const encoder = device.createCommandEncoder(.{
+        const encoder = self.device.createCommandEncoder(.{
             .next_in_chain = null,
             .label = "Screenshot Encoder",
         });
@@ -2032,7 +1965,7 @@ pub const Renderer = struct {
         const commands = encoder.finish(.{
             .label = "Screenshot Commands",
         });
-        queue.submit(&[_]zgpu.wgpu.CommandBuffer{commands});
+        self.queue.submit(&[_]zgpu.wgpu.CommandBuffer{commands});
 
         // Map the staging buffer for CPU read
         const buffer_size: u64 = @as(u64, aligned_bytes_per_row) * @as(u64, height);
@@ -2049,7 +1982,7 @@ pub const Renderer = struct {
         // Poll the device until mapping is complete.
         // Dawn processes mapping synchronously on tick(), so we poll in a loop.
         while (!map_ctx.completed) {
-            device.tick();
+            self.device.tick();
         }
 
         if (map_ctx.status != .success) {
@@ -2085,23 +2018,13 @@ pub const Renderer = struct {
         offscreen_target: *OffscreenRenderTarget,
         filename: []const u8,
     ) RendererError!void {
-        const device = self.device orelse {
-            log.err("cannot take screenshot: device not initialized", .{});
-            return RendererError.ScreenshotFailed;
-        };
-
-        const queue = self.queue orelse {
-            log.err("cannot take screenshot: queue not initialized", .{});
-            return RendererError.ScreenshotFailed;
-        };
-
         const width = offscreen_target.width;
         const height = offscreen_target.height;
         const aligned_bytes_per_row = calcAlignedBytesPerRow(width);
         const buffer_size: u64 = @as(u64, aligned_bytes_per_row) * @as(u64, height);
 
         // Create a staging buffer for CPU readback
-        const staging_buffer = device.createBuffer(.{
+        const staging_buffer = self.device.createBuffer(.{
             .next_in_chain = null,
             .label = "Offscreen Screenshot Staging Buffer",
             .usage = .{ .map_read = true, .copy_dst = true },
@@ -2111,7 +2034,7 @@ pub const Renderer = struct {
         defer staging_buffer.release();
 
         // Create a command encoder for copy operations
-        const encoder = device.createCommandEncoder(.{
+        const encoder = self.device.createCommandEncoder(.{
             .next_in_chain = null,
             .label = "Offscreen Screenshot Encoder",
         });
@@ -2143,7 +2066,7 @@ pub const Renderer = struct {
         const commands = encoder.finish(.{
             .label = "Offscreen Screenshot Commands",
         });
-        queue.submit(&[_]zgpu.wgpu.CommandBuffer{commands});
+        self.queue.submit(&[_]zgpu.wgpu.CommandBuffer{commands});
 
         // Map the staging buffer for CPU read
         var map_ctx: MapCallbackContext = .{};
@@ -2158,7 +2081,7 @@ pub const Renderer = struct {
 
         // Poll the device until mapping is complete
         while (!map_ctx.completed) {
-            device.tick();
+            self.device.tick();
         }
 
         if (map_ctx.status != .success) {
@@ -2420,78 +2343,45 @@ pub const Renderer = struct {
             self.surface = null;
         }
 
-        // Queue is owned by the device, no separate release needed
-        self.queue = null;
-
         // Release shader module before device (it depends on the device)
-        if (self.shader_module) |shader| {
-            shader.release();
-            self.shader_module = null;
-        }
+        self.shader_module.release();
 
         // Release render pipeline before pipeline layout (it depends on the layout)
-        if (self.render_pipeline) |pipeline| {
-            pipeline.release();
-            self.render_pipeline = null;
-        }
+        self.render_pipeline.release();
 
         // Release vertex buffer before device (it depends on the device)
-        if (self.vertex_buffer) |buffer| {
-            buffer.release();
-            self.vertex_buffer = null;
-        }
+        self.vertex_buffer.release();
 
         // Release uniform buffer before device (it depends on the device)
-        if (self.uniform_buffer) |buffer| {
-            buffer.release();
-            self.uniform_buffer = null;
-        }
+        self.uniform_buffer.release();
 
         // Release bind group before bind group layout (it depends on the layout)
-        if (self.bind_group) |bg| {
-            bg.release();
-            self.bind_group = null;
-        }
+        self.bind_group.release();
 
         // Release pipeline layout before device (it depends on the device)
-        if (self.pipeline_layout) |layout| {
-            layout.release();
-            self.pipeline_layout = null;
-        }
+        self.pipeline_layout.release();
 
         // Release bind group layout before device (it depends on the device)
-        if (self.bind_group_layout) |layout| {
-            layout.release();
-            self.bind_group_layout = null;
-        }
+        self.bind_group_layout.release();
 
-        // Release screenshot resources before device
+        // Release screenshot resources before device (these are legitimately optional)
         if (self.screenshot_texture) |texture| {
             texture.release();
-            self.screenshot_texture = null;
         }
         if (self.screenshot_staging_buffer) |buffer| {
             buffer.release();
-            self.screenshot_staging_buffer = null;
         }
 
         // Release the device
-        if (self.device) |device| {
-            device.release();
-            self.device = null;
-        }
+        self.device.release();
 
         // Release the adapter
-        if (self.adapter) |adapter| {
-            adapter.release();
-            self.adapter = null;
-        }
+        self.adapter.release();
+
+        // Queue is owned by the device, no separate release needed
 
         // Release the instance last
-        if (self.instance) |instance| {
-            instance.release();
-            self.instance = null;
-        }
+        self.instance.release();
 
         // Destroy Dawn native instance (C++ cleanup) - native builds only
         // On web, there's no Dawn native instance to destroy.
