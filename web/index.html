@@ -21,7 +21,6 @@
             display: block;
             width: 100vw;
             height: 100vh;
-            background: red;
         }
         .error-message {
             display: none;
@@ -70,9 +69,19 @@
     <div id="error" class="error-message"></div>
     <div id="debug-overlay"></div>
 
-    <!-- Debug overlay: intercept console output and display on screen -->
+    <!-- Debug overlay: intercept console output and display on screen.
+         Activated by adding ?debug to the URL (e.g. https://host:3000/?debug) -->
     <script>
         (function() {
+            const debugEnabled = new URLSearchParams(window.location.search).has("debug");
+            window.__DEBUG = debugEnabled;
+
+            if (!debugEnabled) {
+                // Hide the overlay element entirely
+                document.getElementById("debug-overlay").style.display = "none";
+                return;
+            }
+
             const overlay = document.getElementById("debug-overlay");
             let lineCount = 0;
             const MAX_LINES = 200;
