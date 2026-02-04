@@ -1416,21 +1416,19 @@ pub const WebPlatform = struct {
 /// Public to allow access from the main loop callback in main.zig.
 pub var global_web_platform: ?*WebPlatform = null;
 
-// Import App and Renderer types.
-// These are forward-declared here to avoid circular dependencies since web.zig
-// is only compiled for WASM targets where these modules exist.
-const App = @import("../app.zig").App;
+// Import types needed by GlobalAppState.
+const AppInterface = @import("../app_interface.zig").AppInterface;
 const renderer_mod = @import("../renderer.zig");
 const Renderer = renderer_mod.Renderer;
 const RenderTarget = @import("../render_target.zig").RenderTarget;
 
 /// Global state for the Emscripten main loop callback.
 /// The callback is a C function pointer that cannot capture context, so we
-/// store App and Renderer pointers here for access from the callback.
+/// store the AppInterface and Renderer pointers here for access from the callback.
 ///
 /// This struct groups all runtime state needed by mainLoopCallback():
 /// - platform: WebPlatform for input/window management
-/// - app: Application state and logic
+/// - app_interface: Application interface (vtable) for update/render/lifecycle
 /// - renderer: WebGPU rendering context (null until WebGPU is initialized)
 /// - render_target: RenderTarget for the current frame (null until initialized)
 ///
@@ -1439,8 +1437,9 @@ const RenderTarget = @import("../render_target.zig").RenderTarget;
 pub const GlobalAppState = struct {
     /// Web platform for input handling and canvas management.
     platform: *WebPlatform,
-    /// Application state containing game logic and UI.
-    app: *App,
+    /// Application interface for update, render, and lifecycle methods.
+    /// Uses the AppInterface vtable so the platform is not coupled to a concrete App type.
+    app_interface: *AppInterface,
     /// WebGPU renderer for drawing. Null until WebGPU context is obtained.
     /// On web, WebGPU initialization is asynchronous and happens after
     /// the main loop starts, so this may be null during initial frames.

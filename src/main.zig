@@ -14,6 +14,7 @@ const builtin = @import("builtin");
 const zgpu = @import("zgpu");
 
 const App = @import("app.zig").App;
+const AppInterface = @import("app_interface.zig").AppInterface;
 const platform_mod = @import("platform.zig");
 const Platform = platform_mod.Platform;
 
@@ -89,7 +90,7 @@ const PreSubmitHook = struct {
 /// endFrame, allowing the caller to record additional GPU commands (e.g.,
 /// copying the rendered texture to a staging buffer for CPU readback).
 fn runFrame(
-    app: *App,
+    app: *AppInterface,
     renderer: *Renderer,
     render_target: *renderer_mod.RenderTarget,
     pre_submit_hook: ?PreSubmitHook,
@@ -399,10 +400,13 @@ fn runWindowedImpl(config: Config) void {
         .quit_after_screenshot = true,
     };
     var app = App.initWithOptions(std.heap.page_allocator, app_options);
-    defer app.deinit();
 
     // Set renderer reference for screenshot capability
     app.setRenderer(&renderer);
+
+    // Get the AppInterface vtable for polymorphic access
+    var iface = app.appInterface();
+    defer iface.deinit();
 
     // Get the platform abstraction interface
     var plat = platform.platform();
@@ -412,7 +416,7 @@ fn runWindowedImpl(config: Config) void {
     var last_time: f64 = zglfw.getTime();
 
     // Main loop
-    while (!plat.shouldQuit() and app.isRunning()) {
+    while (!plat.shouldQuit() and iface.isRunning()) {
         plat.pollEvents();
 
         const current_time = zglfw.getTime();
@@ -424,7 +428,7 @@ fn runWindowedImpl(config: Config) void {
         }
 
         if (plat.isKeyPressed(.escape)) {
-            app.requestQuit();
+            iface.requestQuit();
             continue;
         }
 
@@ -433,7 +437,7 @@ fn runWindowedImpl(config: Config) void {
         // so we use getWindowSize() for the conversion denominator.
         const raw_mouse = plat.getMouseState();
         const mouse_state = toLogicalCoordinates(raw_mouse, plat.getWindowSize());
-        app.update(delta_time, mouse_state);
+        iface.update(delta_time, mouse_state);
 
         // Check if render target needs resize
         const current_fb = platform.getFramebufferSize();
@@ -450,14 +454,14 @@ fn runWindowedImpl(config: Config) void {
             continue;
         }
 
-        runFrame(&app, &renderer, render_target, null);
+        runFrame(&iface, &renderer, render_target, null);
 
         // Check if App wants to take a screenshot after this frame
-        if (app.shouldTakeScreenshot()) |filename| {
+        if (iface.shouldTakeScreenshot()) |filename| {
             renderer.screenshot(filename) catch |err| {
                 log.err("failed to take screenshot: {}", .{err});
             };
-            app.onScreenshotComplete();
+            iface.onScreenshotComplete();
         }
     }
 }
@@ -491,10 +495,13 @@ fn runHeadless(config: Config) void {
         .quit_after_screenshot = true,
     };
     var app = App.initWithOptions(std.heap.page_allocator, app_options);
-    defer app.deinit();
 
     // Set renderer reference for screenshot capability
     app.setRenderer(&renderer);
+
+    // Get the AppInterface vtable for polymorphic access
+    var iface = app.appInterface();
+    defer iface.deinit();
 
     // Get the platform abstraction interface
     var plat = platform.platform();
@@ -504,7 +511,7 @@ fn runHeadless(config: Config) void {
     var frame_count: u64 = 0;
 
     // Headless main loop - runs for a limited number of frames or until screenshot is taken
-    while (!plat.shouldQuit() and app.isRunning()) {
+    while (!plat.shouldQuit() and iface.isRunning()) {
         plat.pollEvents();
 
         // Use synthetic delta time (60 FPS simulation)
@@ -513,7 +520,7 @@ fn runHeadless(config: Config) void {
         // Convert mouse from physical pixel space to logical viewport space.
         const raw_mouse = plat.getMouseState();
         const mouse_state = toLogicalCoordinates(raw_mouse, plat.getWindowSize());
-        app.update(delta_time, mouse_state);
+        iface.update(delta_time, mouse_state);
 
         // Use pre-submit hook to copy rendered texture to staging buffer
         // for CPU readback. This must happen after rendering but before
@@ -527,18 +534,18 @@ fn runHeadless(config: Config) void {
                 }
             }.cb,
         };
-        runFrame(&app, &renderer, render_target, hook);
+        runFrame(&iface, &renderer, render_target, hook);
 
         frame_count += 1;
         log.info("headless frame {} rendered successfully", .{frame_count});
 
         // Check if App wants to take a screenshot after this frame
-        if (app.shouldTakeScreenshot()) |filename| {
+        if (iface.shouldTakeScreenshot()) |filename| {
             log.info("taking headless screenshot to {s}", .{filename});
             renderer.takeScreenshotFromOffscreen(&offscreen_target, filename) catch |err| {
                 log.err("failed to take headless screenshot: {}", .{err});
             };
-            app.onScreenshotComplete();
+            iface.onScreenshotComplete();
         }
     }
 
@@ -563,6 +570,7 @@ const wasm_exports = if (is_wasm) struct {
     /// The callback accesses these via web.global_app_state pointer.
     var static_platform: web.WebPlatform = undefined;
     var static_app: App = undefined;
+    var static_app_interface: AppInterface = undefined;
     var static_app_state: web.GlobalAppState = undefined;
 
     /// Static storage for renderer and render target.
@@ -603,8 +611,8 @@ const wasm_exports = if (is_wasm) struct {
         const raw_mouse = state.platform.getMouseState();
         const mouse_state = toLogicalCoordinates(raw_mouse, state.platform.getWindowSize());
 
-        // Update application state
-        state.app.update(delta_time, mouse_state);
+        // Update application state via the interface
+        state.app_interface.update(delta_time, mouse_state);
 
         // Log frame callback invocations for browser console debugging.
         // First frame logs to confirm main loop started; then every 60 frames (~1s at 60 FPS).
@@ -619,12 +627,12 @@ const wasm_exports = if (is_wasm) struct {
         // On web, WebGPU initialization is asynchronous so renderer may be null initially.
         if (state.renderer) |renderer| {
             if (state.render_target) |rt| {
-                runFrame(state.app, renderer, rt, null);
+                runFrame(state.app_interface, renderer, rt, null);
             }
         }
 
         // Check if quit was requested or app stopped running
-        if (state.platform.shouldClose() or !state.app.isRunning()) {
+        if (state.platform.shouldClose() or !state.app_interface.isRunning()) {
             log.info("quit requested, cancelling main loop", .{});
             web.emscripten.emscripten_cancel_main_loop();
         }
@@ -675,11 +683,14 @@ const wasm_exports = if (is_wasm) struct {
         // Set renderer reference for the app (for screenshot capability)
         static_app.setRenderer(&static_renderer);
 
-        // Initialize global app state struct with platform, app, renderer, and render target.
+        // Create the AppInterface vtable in static storage so it persists across frames
+        static_app_interface = static_app.appInterface();
+
+        // Initialize global app state struct with platform, app interface, renderer, and render target.
         // All pointers are now valid and ready for the main loop callback.
         static_app_state = .{
             .platform = &static_platform,
-            .app = &static_app,
+            .app_interface = &static_app_interface,
             .renderer = &static_renderer,
             .last_frame_time = web.emscripten.emscripten_get_now(),
             .render_target = &static_render_target,
@@ -736,4 +747,5 @@ fn wasmStart() callconv(.c) void {
 // Pull in tests from modules that aren't transitively imported by the main code paths.
 test {
     _ = @import("canvas.zig");
+    _ = @import("app_interface.zig");
 }

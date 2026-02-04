@@ -18,6 +18,8 @@ const canvas_mod = @import("canvas.zig");
 const Canvas = canvas_mod.Canvas;
 const Color = canvas_mod.Color;
 
+const AppInterface = @import("app_interface.zig").AppInterface;
+
 const log = std.log.scoped(.app);
 
 /// Application state container.
@@ -166,6 +168,63 @@ pub const App = struct {
     pub fn deinit(self: *Self) void {
         log.debug("deinitializing app (frame_count={})", .{self.frame_count});
         self.running = false;
+    }
+
+    /// Get the AppInterface vtable for this App.
+    /// Returns an AppInterface that delegates to this concrete App instance,
+    /// allowing the platform framework to use it polymorphically.
+    ///
+    /// The returned interface is valid as long as this App instance is alive
+    /// and has not been moved. Call this again if the App is relocated in memory.
+    pub fn appInterface(self: *Self) AppInterface {
+        return .{
+            .context = @ptrCast(self),
+            .updateFn = &updateImpl,
+            .renderFn = &renderImpl,
+            .isRunningFn = &isRunningImpl,
+            .requestQuitFn = &requestQuitImpl,
+            .deinitFn = &deinitImpl,
+            .shouldTakeScreenshotFn = &shouldTakeScreenshotImpl,
+            .onScreenshotCompleteFn = &onScreenshotCompleteImpl,
+        };
+    }
+
+    // -- AppInterface vtable implementations --
+    // These bridge the generic interface to concrete App methods.
+
+    fn updateImpl(iface: *AppInterface, delta_time: f32, mouse_state: MouseState) void {
+        const self: *Self = @ptrCast(@alignCast(iface.context));
+        self.update(delta_time, mouse_state);
+    }
+
+    fn renderImpl(iface: *AppInterface, canvas: *Canvas) void {
+        const self: *Self = @ptrCast(@alignCast(iface.context));
+        self.render(canvas);
+    }
+
+    fn isRunningImpl(iface: *const AppInterface) bool {
+        const self: *const Self = @ptrCast(@alignCast(iface.context));
+        return self.isRunning();
+    }
+
+    fn requestQuitImpl(iface: *AppInterface) void {
+        const self: *Self = @ptrCast(@alignCast(iface.context));
+        self.requestQuit();
+    }
+
+    fn deinitImpl(iface: *AppInterface) void {
+        const self: *Self = @ptrCast(@alignCast(iface.context));
+        self.deinit();
+    }
+
+    fn shouldTakeScreenshotImpl(iface: *const AppInterface) ?[]const u8 {
+        const self: *const Self = @ptrCast(@alignCast(iface.context));
+        return self.shouldTakeScreenshot();
+    }
+
+    fn onScreenshotCompleteImpl(iface: *AppInterface) void {
+        const self: *Self = @ptrCast(@alignCast(iface.context));
+        self.onScreenshotComplete();
     }
 
     /// Check if the application should continue running.
@@ -781,4 +840,31 @@ test "App scheduleScreenshot sets up screenshot" {
     try std.testing.expect(path != null);
     try std.testing.expectEqualStrings("/tmp/dynamic.png", path.?);
     try std.testing.expect(!app.quit_after_screenshot);
+}
+
+test "App implements AppInterface correctly" {
+    var app = App.init(std.testing.allocator);
+    var iface = app.appInterface();
+    defer iface.deinit();
+
+    // Verify interface methods work through the vtable
+    try std.testing.expect(iface.isRunning());
+
+    // Update through interface
+    const mouse_state: MouseState = .{
+        .x = 0.0,
+        .y = 0.0,
+        .left_pressed = false,
+        .right_pressed = false,
+        .middle_pressed = false,
+    };
+    iface.update(0.016, mouse_state);
+    try std.testing.expectEqual(@as(u64, 1), app.getFrameCount());
+
+    // Screenshot optional methods should work
+    try std.testing.expectEqual(@as(?[]const u8, null), iface.shouldTakeScreenshot());
+
+    // Quit through interface
+    iface.requestQuit();
+    try std.testing.expect(!iface.isRunning());
 }
