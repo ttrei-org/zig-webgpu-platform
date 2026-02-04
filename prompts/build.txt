@@ -13,7 +13,7 @@ Compare screenshots of both native and web (see AGENTS.md on how to use playwrig
 
 9. When you learn something new about how to use/run the application/tests/other, make sure you update @AGENT.md using a subagent but keep it brief. For example if you run commands multiple times before learning the correct command then that file should be updated.
 
-99. Important! If you discover a bug, either fix it using a subagent or create a new bead using a subagent (or multiple if the required fix is large and can be broken down in logical steps).
+99. Important! If you discover a bug, either fix it using a subagent if it is required by the task at hand, or create a new bead using a subagent (or multiple if the required fix is large and can be broken down in logical steps).
 
 999. Important! If you discover a deficiency in design, create one or more beads using a subagent.
 
