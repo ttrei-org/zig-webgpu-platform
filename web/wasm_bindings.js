@@ -222,6 +222,98 @@ function vertexFormatToJS(format) {
     return VERTEX_FORMAT_MAP[format] || "float32";
 }
 
+// Blend factor mapping (emscripten enum values, offset by 1 from native Dawn values)
+const BLEND_FACTOR_MAP = {
+    0x00000001: "zero",
+    0x00000002: "one",
+    0x00000003: "src",
+    0x00000004: "one-minus-src",
+    0x00000005: "src-alpha",
+    0x00000006: "one-minus-src-alpha",
+    0x00000007: "dst",
+    0x00000008: "one-minus-dst",
+    0x00000009: "dst-alpha",
+    0x0000000A: "one-minus-dst-alpha",
+    0x0000000B: "src-alpha-saturated",
+    0x0000000C: "constant",
+    0x0000000D: "one-minus-constant",
+};
+
+function blendFactorToJS(factor) {
+    return BLEND_FACTOR_MAP[factor] || "one";
+}
+
+// Blend operation mapping (emscripten enum values)
+const BLEND_OP_MAP = {
+    0x00000001: "add",
+    0x00000002: "subtract",
+    0x00000003: "reverse-subtract",
+    0x00000004: "max",
+    0x00000008: "min",
+};
+
+function blendOpToJS(op) {
+    return BLEND_OP_MAP[op] || "add";
+}
+
+// Primitive topology mapping (emscripten enum values, offset by 1)
+const PRIMITIVE_TOPOLOGY_MAP = {
+    0x00000001: "point-list",
+    0x00000002: "line-list",
+    0x00000003: "line-strip",
+    0x00000004: "triangle-list",
+    0x00000005: "triangle-strip",
+};
+
+function primitiveTopologyToJS(topology) {
+    return PRIMITIVE_TOPOLOGY_MAP[topology] || "triangle-list";
+}
+
+// Cull mode mapping
+const CULL_MODE_MAP = {
+    0x00000000: "none",
+    0x00000001: "front",
+    0x00000002: "back",
+};
+
+function cullModeToJS(mode) {
+    return CULL_MODE_MAP[mode] || "none";
+}
+
+// Front face mapping
+const FRONT_FACE_MAP = {
+    0x00000000: "ccw",
+    0x00000001: "cw",
+};
+
+function frontFaceToJS(face) {
+    return FRONT_FACE_MAP[face] || "ccw";
+}
+
+// Parse a BlendState from WASM memory (24 bytes)
+function parseBlendState(ptr) {
+    if (!ptr) return undefined;
+    return {
+        color: {
+            operation: blendOpToJS(readU32(ptr + 0)),
+            srcFactor: blendFactorToJS(readU32(ptr + 4)),
+            dstFactor: blendFactorToJS(readU32(ptr + 8)),
+        },
+        alpha: {
+            operation: blendOpToJS(readU32(ptr + 12)),
+            srcFactor: blendFactorToJS(readU32(ptr + 16)),
+            dstFactor: blendFactorToJS(readU32(ptr + 20)),
+        },
+    };
+}
+
+// Parse ColorWriteMask bits to GPUColorWrite flags
+function colorWriteMaskToFlags(mask) {
+    // Zig ColorWriteMask: bit 0=red, 1=green, 2=blue, 3=alpha
+    // GPUColorWrite: RED=0x1, GREEN=0x2, BLUE=0x4, ALPHA=0x8, ALL=0xF
+    return mask & 0xF;
+}
+
 // =============================================================================
 // Emscripten Runtime Stubs
 // =============================================================================
@@ -748,22 +840,96 @@ const webgpuStubs = {
             });
         }
 
-        // Primitive state - need to find offset after vertex state
-        // This gets complex. For simplicity, use defaults.
+        // Parse primitive state from descriptor at offset 40
+        // PrimitiveState layout (20 bytes):
+        //   offset 0: next_in_chain (ptr)
+        //   offset 4: topology (u32 enum)
+        //   offset 8: strip_index_format (u32 enum)
+        //   offset 12: front_face (u32 enum)
+        //   offset 16: cull_mode (u32 enum)
+        const primTopology = readU32(descriptorPtr + 44);
+        const primFrontFace = readU32(descriptorPtr + 52);
+        const primCullMode = readU32(descriptorPtr + 56);
+
         const primitiveState = {
-            topology: "triangle-list",
-            frontFace: "ccw",
-            cullMode: "none",
+            topology: primitiveTopologyToJS(primTopology),
+            frontFace: frontFaceToJS(primFrontFace),
+            cullMode: cullModeToJS(primCullMode),
         };
 
-        // Fragment state - pointer is at a known offset
-        // Due to complexity, we'll find the fragment module in a simplified way
-        // The descriptor has fragment state pointer after vertex+primitive+depth/multisample
-        
-        // Try to find fragment state - it's typically near the end
-        // For bgra8unorm target format
-        const fragmentModuleHandle = readU32(descriptorPtr + 16); // Same module usually
-        const fragmentEntryPoint = "fs_main";
+        // Parse fragment state pointer at offset 80
+        // FragmentState layout (28 bytes):
+        //   offset 0: next_in_chain (ptr)
+        //   offset 4: module (handle)
+        //   offset 8: entry_point (ptr to string)
+        //   offset 12: constant_count (u32)
+        //   offset 16: constants (ptr)
+        //   offset 20: target_count (u32)
+        //   offset 24: targets (ptr to ColorTargetState array)
+        const fragmentStatePtr = readU32(descriptorPtr + 80);
+        let fragmentState = null;
+
+        if (fragmentStatePtr) {
+            const fragModuleHandle = readU32(fragmentStatePtr + 4);
+            const fragEntryPointPtr = readU32(fragmentStatePtr + 8);
+            const fragTargetCount = readU32(fragmentStatePtr + 20);
+            const fragTargetsPtr = readU32(fragmentStatePtr + 24);
+
+            const fragModuleObj = getHandle(fragModuleHandle);
+            const fragEntryPoint = fragEntryPointPtr ? readCString(fragEntryPointPtr) : "fs_main";
+
+            // Parse color target states (each 16 bytes):
+            //   offset 0: next_in_chain (ptr)
+            //   offset 4: format (u32 enum)
+            //   offset 8: blend (ptr to BlendState, nullable)
+            //   offset 12: write_mask (u32, ColorWriteMask bits)
+            const targets = [];
+            const COLOR_TARGET_SIZE = 16;
+
+            for (let i = 0; i < fragTargetCount; i++) {
+                const tgtPtr = fragTargetsPtr + i * COLOR_TARGET_SIZE;
+                const zigFormat = readU32(tgtPtr + 4);
+                const blendPtr = readU32(tgtPtr + 8);
+                const writeMask = readU32(tgtPtr + 12);
+
+                const zigFormatStr = textureFormatToJS(zigFormat);
+
+                // Use browser's preferred format instead of Zig's hardcoded format,
+                // since the swap chain canvas context is configured with preferredCanvasFormat.
+                // On desktop Chrome this is bgra8unorm, on mobile Chrome it's rgba8unorm.
+                const targetFormat = preferredCanvasFormat;
+
+                const target = {
+                    format: targetFormat,
+                    writeMask: colorWriteMaskToFlags(writeMask),
+                };
+
+                // Parse blend state if present
+                if (blendPtr) {
+                    target.blend = parseBlendState(blendPtr);
+                }
+
+                targets.push(target);
+
+                if (i === 0) {
+                    console.log("Pipeline color target[0]: zigFormat=" + zigFormatStr +
+                        " -> " + targetFormat + ", blend=" + (blendPtr ? "yes" : "no") +
+                        ", writeMask=0x" + writeMask.toString(16));
+                    if (blendPtr) {
+                        console.log("  blend.color: " + target.blend.color.srcFactor +
+                            " " + target.blend.color.operation + " " + target.blend.color.dstFactor);
+                        console.log("  blend.alpha: " + target.blend.alpha.srcFactor +
+                            " " + target.blend.alpha.operation + " " + target.blend.alpha.dstFactor);
+                    }
+                }
+            }
+
+            fragmentState = {
+                module: fragModuleObj ? fragModuleObj.module : (vertexModuleObj ? vertexModuleObj.module : null),
+                entryPoint: fragEntryPoint,
+                targets: targets,
+            };
+        }
 
         const pipelineDesc = {
             layout: layoutObj ? layoutObj.layout : "auto",
@@ -773,23 +939,26 @@ const webgpuStubs = {
                 buffers: vertexBuffers,
             },
             primitive: primitiveState,
-            fragment: {
-                module: vertexModuleObj ? vertexModuleObj.module : null,
-                entryPoint: fragmentEntryPoint,
-                targets: [{
-                    format: preferredCanvasFormat,
-                }],
-            },
         };
 
-        console.log("Creating render pipeline with format:", preferredCanvasFormat);
+        if (fragmentState) {
+            pipelineDesc.fragment = fragmentState;
+        }
+
+        console.log("Creating render pipeline with format:", preferredCanvasFormat,
+            "primitive:", primitiveState.topology, primitiveState.cullMode);
         try {
+            // Push error scope to catch deferred validation errors (e.g. invalid pipeline)
+            deviceObj.device.pushErrorScope("validation");
             const pipeline = deviceObj.device.createRenderPipeline(pipelineDesc);
+            deviceObj.device.popErrorScope().then(err => {
+                if (err) console.error("Pipeline validation error: " + err.message);
+                else console.log("Pipeline passed GPU validation");
+            });
             console.log("Render pipeline created successfully");
             return registerHandle({ type: "renderPipeline", pipeline: pipeline });
         } catch (e) {
             console.error("Render pipeline creation failed:", e);
-            console.error("Descriptor:", pipelineDesc);
             return 0;
         }
     },
