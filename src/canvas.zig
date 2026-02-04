@@ -71,6 +71,74 @@ pub const Canvas = struct {
             .{ tr, br, bl },
         );
     }
+
+    /// Draw a filled circle as a triangle fan from the center.
+    ///
+    /// The circle is approximated by `segments` triangles radiating from
+    /// the center point. More segments produce a smoother circle.
+    ///
+    /// Coordinates are in screen space (origin top-left, X right, Y down).
+    pub fn fillCircle(self: Canvas, cx: f32, cy: f32, radius: f32, color: Color, segments: u16) void {
+        if (segments < 3) return;
+        const seg_f: f32 = @floatFromInt(segments);
+        var i: u16 = 0;
+        while (i < segments) : (i += 1) {
+            const i_f: f32 = @floatFromInt(i);
+            const next_f: f32 = @floatFromInt(i + 1);
+            const angle1 = i_f * std.math.tau / seg_f;
+            const angle2 = next_f * std.math.tau / seg_f;
+            self.renderer.queueTriangle(
+                .{
+                    .{ cx, cy },
+                    .{ cx + radius * @cos(angle1), cy + radius * @sin(angle1) },
+                    .{ cx + radius * @cos(angle2), cy + radius * @sin(angle2) },
+                },
+                .{ color, color, color },
+            );
+        }
+    }
+
+    /// Draw a line segment with the given thickness as a rotated rectangle.
+    ///
+    /// The line is rendered as 2 triangles forming a rectangle oriented
+    /// along the direction from (x1,y1) to (x2,y2). Returns immediately
+    /// for degenerate (near-zero-length) lines.
+    ///
+    /// Coordinates are in screen space (origin top-left, X right, Y down).
+    pub fn drawLine(self: Canvas, x1: f32, y1: f32, x2: f32, y2: f32, thickness: f32, color: Color) void {
+        const dx = x2 - x1;
+        const dy = y2 - y1;
+        const len = @sqrt(dx * dx + dy * dy);
+        if (len < 0.001) return;
+        // Perpendicular offset for the line's thickness
+        const half_t = thickness * 0.5;
+        const nx = -dy / len * half_t;
+        const ny = dx / len * half_t;
+        const p0 = [2]f32{ x1 + nx, y1 + ny };
+        const p1 = [2]f32{ x1 - nx, y1 - ny };
+        const p2 = [2]f32{ x2 - nx, y2 - ny };
+        const p3 = [2]f32{ x2 + nx, y2 + ny };
+        self.renderer.queueTriangle(.{ p0, p1, p2 }, .{ color, color, color });
+        self.renderer.queueTriangle(.{ p0, p2, p3 }, .{ color, color, color });
+    }
+
+    /// Draw a filled convex polygon using fan triangulation from the first vertex.
+    ///
+    /// Only correct for convex polygons. For concave shapes the result
+    /// will have visual artifacts. Degenerate polygons (< 3 points) are
+    /// silently ignored.
+    ///
+    /// Coordinates are in screen space (origin top-left, X right, Y down).
+    pub fn fillPolygon(self: Canvas, points: []const [2]f32, color: Color) void {
+        if (points.len < 3) return;
+        // Fan triangulation: anchor at points[0], sweep remaining edges
+        for (1..points.len - 1) |i| {
+            self.renderer.queueTriangle(
+                .{ points[0], points[i], points[i + 1] },
+                .{ color, color, color },
+            );
+        }
+    }
 };
 
 // --- Tests ---
@@ -104,4 +172,25 @@ test "fillRect solid color delegates to fillRectGradient" {
 test "Color re-export matches renderer Color" {
     // Verify the re-exported Color type is identical to the renderer's Color.
     try std.testing.expect(Color == renderer_mod.Color);
+}
+
+test "fillCircle signature" {
+    // Verify fillCircle has the correct signature: self, cx, cy, radius, color, segments
+    const FnInfo = @typeInfo(@TypeOf(Canvas.fillCircle));
+    const params = FnInfo.@"fn".params;
+    try std.testing.expectEqual(@as(usize, 6), params.len);
+}
+
+test "drawLine signature" {
+    // Verify drawLine has the correct signature: self, x1, y1, x2, y2, thickness, color
+    const FnInfo = @typeInfo(@TypeOf(Canvas.drawLine));
+    const params = FnInfo.@"fn".params;
+    try std.testing.expectEqual(@as(usize, 7), params.len);
+}
+
+test "fillPolygon signature" {
+    // Verify fillPolygon has the correct signature: self, points, color
+    const FnInfo = @typeInfo(@TypeOf(Canvas.fillPolygon));
+    const params = FnInfo.@"fn".params;
+    try std.testing.expectEqual(@as(usize, 3), params.len);
 }
