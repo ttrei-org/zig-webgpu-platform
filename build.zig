@@ -70,8 +70,17 @@ pub fn build(b: *std.Build) void {
         exe.linkLibC();
         exe.linkLibCpp();
 
-        // Link X11 on Linux for Dawn's surface support
+        // Link X11 on Linux for Dawn's surface support.
+        // For cross-compilation (e.g. aarch64-linux-gnu), the system_sdk
+        // provides the X11 library since it won't be on the host system.
         if (target_os == .linux) {
+            if (b.lazyDependency("system_sdk", .{})) |system_sdk| {
+                if (target.result.cpu.arch.isX86()) {
+                    exe.root_module.addLibraryPath(system_sdk.path("linux/lib/x86_64-linux-gnu"));
+                } else if (target.result.cpu.arch.isAARCH64()) {
+                    exe.root_module.addLibraryPath(system_sdk.path("linux/lib/aarch64-linux-gnu"));
+                }
+            }
             exe.linkSystemLibrary("X11");
         }
 

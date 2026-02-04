@@ -45,6 +45,13 @@
             .hash = "N-V-__8AAIz1QAKx8C8vft2YoHjGTjEAkH2QMR2UiAo8xZJ-",
             .lazy = true,
         },
+        // System SDK provides platform headers and libraries for cross-compilation
+        // (Windows libs, macOS frameworks, Linux X11/Wayland headers+libs).
+        // Required by zgpu (Windows/macOS) and zglfw (all platforms).
+        .system_sdk = .{
+            .url = "https://github.com/zig-gamedev/system_sdk/archive/c0dbf11cdc17da5904ea8a17eadc54dee26567ec.tar.gz",
+            .hash = "system_sdk-0.3.0-dev-alwUNnYaaAJAtIdE2fg4NQfDqEKs7QCXy_qYukAOBfmF",
+        },
         .zigimg = .{
             .url = "https://github.com/zigimg/zigimg/archive/refs/heads/master.tar.gz",
             .hash = "zigimg-0.1.0-8_eo2kSGFwADIkeZYTgfnLOV-khh6ZRoGmK6F2-s_QbY",
