@@ -35,6 +35,9 @@ const renderer_mod = @import("renderer.zig");
 const Renderer = renderer_mod.Renderer;
 const OffscreenRenderTarget = renderer_mod.OffscreenRenderTarget;
 
+const canvas_mod = @import("canvas.zig");
+const Canvas = canvas_mod.Canvas;
+
 const log = std.log.scoped(.main);
 
 /// Configure logging level and custom log function for WASM.
@@ -371,7 +374,8 @@ fn runWindowedImpl(config: Config) void {
         };
 
         const render_pass = Renderer.beginRenderPass(frame_state, Renderer.cornflower_blue);
-        app.render(&renderer);
+        var canvas = Canvas.init(&renderer);
+        app.render(&canvas);
         renderer.flushBatch(render_pass);
         Renderer.endRenderPass(render_pass);
         renderer.endFrame(frame_state, render_target);
@@ -443,7 +447,8 @@ fn runHeadless(config: Config) void {
         };
 
         const render_pass = Renderer.beginRenderPass(frame_state, Renderer.cornflower_blue);
-        app.render(&renderer);
+        var canvas = Canvas.init(&renderer);
+        app.render(&canvas);
         renderer.flushBatch(render_pass);
         Renderer.endRenderPass(render_pass);
 
@@ -552,7 +557,8 @@ const wasm_exports = if (is_wasm) struct {
 
                 // Render: clear, draw app content, flush batch
                 const render_pass = Renderer.beginRenderPass(frame_state, Renderer.cornflower_blue);
-                state.app.render(renderer);
+                var canvas = Canvas.init(renderer);
+                state.app.render(&canvas);
                 renderer.flushBatch(render_pass);
                 Renderer.endRenderPass(render_pass);
 

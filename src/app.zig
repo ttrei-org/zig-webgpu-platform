@@ -15,6 +15,9 @@ const renderer_mod = @import("renderer.zig");
 const Renderer = renderer_mod.Renderer;
 const Color = renderer_mod.Color;
 
+const canvas_mod = @import("canvas.zig");
+const Canvas = canvas_mod.Canvas;
+
 const log = std.log.scoped(.app);
 
 /// Application state container.
@@ -236,14 +239,14 @@ pub const App = struct {
     }
 
     /// Called once per frame after update to queue draw commands.
-    /// The application uses the renderer to queue shapes for batched rendering.
+    /// The application uses the Canvas to draw shapes for batched rendering.
     /// Draw commands are accumulated and rendered in a single batched draw call
     /// when flushBatch() is called.
     ///
     /// Parameters:
-    /// - renderer: Pointer to the Renderer for queuing draw commands.
-    pub fn render(self: *const Self, renderer: *Renderer) void {
-        // Static test pattern demonstrating the triangle API.
+    /// - canvas: Pointer to the Canvas for drawing shapes.
+    pub fn render(self: *const Self, canvas: *Canvas) void {
+        // Static test pattern demonstrating the Canvas shape API.
         // Creates a radial "starburst" pattern with triangles emanating from center,
         // plus corner accent triangles. Showcases Color constants and helpers.
         //
@@ -291,7 +294,7 @@ pub const App = struct {
             // Create gradient by darkening the base color at the apex
             const apex_color = Color.rgb(base_color.r * 0.3, base_color.g * 0.3, base_color.b * 0.3);
 
-            renderer.queueTriangle(
+            canvas.fillTriangle(
                 .{
                     .{ apex_x, apex_y },
                     .{ base_left_x, base_left_y },
@@ -306,7 +309,7 @@ pub const App = struct {
         }
 
         // Central triangle using classic RGB gradient (demonstrates color interpolation)
-        renderer.queueTriangle(
+        canvas.fillTriangle(
             .{
                 .{ center_x, center_y - 15.0 }, // Top
                 .{ center_x - 13.0, center_y + 8.0 }, // Bottom-left
@@ -322,7 +325,7 @@ pub const App = struct {
         // Corner accent triangles demonstrating various Color API methods
 
         // Top-left: Yellow tones using Color constant and rgb() helper
-        renderer.queueTriangle(
+        canvas.fillTriangle(
             .{
                 .{ 10.0, 50.0 },
                 .{ 50.0, 50.0 },
@@ -336,7 +339,7 @@ pub const App = struct {
         );
 
         // Top-right: Cyan tones using Color constant and rgb() helper
-        renderer.queueTriangle(
+        canvas.fillTriangle(
             .{
                 .{ 350.0, 50.0 },
                 .{ 390.0, 50.0 },
@@ -350,7 +353,7 @@ pub const App = struct {
         );
 
         // Bottom-left: Magenta tones using Color constant and fromHex() helper
-        renderer.queueTriangle(
+        canvas.fillTriangle(
             .{
                 .{ 10.0, 250.0 },
                 .{ 50.0, 250.0 },
@@ -364,7 +367,7 @@ pub const App = struct {
         );
 
         // Bottom-right: Grayscale using rgb() for precise control
-        renderer.queueTriangle(
+        canvas.fillTriangle(
             .{
                 .{ 350.0, 250.0 },
                 .{ 390.0, 250.0 },
@@ -388,7 +391,7 @@ pub const App = struct {
         // Tests coordinate system at extreme positions (0,0), (width,0), (0,height), (width,height).
 
         // Top-left corner (0,0): red marker pointing into corner
-        renderer.queueTriangle(
+        canvas.fillTriangle(
             .{
                 .{ 0.0, 0.0 }, // Exact corner
                 .{ marker_size, 0.0 }, // Along top edge
@@ -398,7 +401,7 @@ pub const App = struct {
         );
 
         // Top-right corner (width,0): green marker pointing into corner
-        renderer.queueTriangle(
+        canvas.fillTriangle(
             .{
                 .{ width, 0.0 }, // Exact corner
                 .{ width - marker_size, 0.0 }, // Along top edge
@@ -408,7 +411,7 @@ pub const App = struct {
         );
 
         // Bottom-left corner (0,height): blue marker pointing into corner
-        renderer.queueTriangle(
+        canvas.fillTriangle(
             .{
                 .{ 0.0, height }, // Exact corner
                 .{ marker_size, height }, // Along bottom edge
@@ -418,7 +421,7 @@ pub const App = struct {
         );
 
         // Bottom-right corner (width,height): white marker pointing into corner
-        renderer.queueTriangle(
+        canvas.fillTriangle(
             .{
                 .{ width, height }, // Exact corner
                 .{ width - marker_size, height }, // Along bottom edge
@@ -433,7 +436,7 @@ pub const App = struct {
         const edge_depth: f32 = 10.0;
 
         // Top edge center: orange marker pointing down
-        renderer.queueTriangle(
+        canvas.fillTriangle(
             .{
                 .{ width / 2.0, 0.0 }, // Apex at top edge center
                 .{ width / 2.0 - edge_marker_half, edge_depth }, // Base left
@@ -447,7 +450,7 @@ pub const App = struct {
         );
 
         // Bottom edge center: cyan marker pointing up
-        renderer.queueTriangle(
+        canvas.fillTriangle(
             .{
                 .{ width / 2.0, height }, // Apex at bottom edge center
                 .{ width / 2.0 - edge_marker_half, height - edge_depth }, // Base left
@@ -457,7 +460,7 @@ pub const App = struct {
         );
 
         // Left edge center: yellow marker pointing right
-        renderer.queueTriangle(
+        canvas.fillTriangle(
             .{
                 .{ 0.0, height / 2.0 }, // Apex at left edge center
                 .{ edge_depth, height / 2.0 - edge_marker_half }, // Base top
@@ -467,7 +470,7 @@ pub const App = struct {
         );
 
         // Right edge center: magenta marker pointing left
-        renderer.queueTriangle(
+        canvas.fillTriangle(
             .{
                 .{ width, height / 2.0 }, // Apex at right edge center
                 .{ width - edge_depth, height / 2.0 - edge_marker_half }, // Base top
@@ -477,47 +480,28 @@ pub const App = struct {
         );
 
         // Mouse position debug display - visual crosshair at current mouse location.
-        // Verifies mouse position updates correctly with (0,0) at top-left,
-        // X increasing rightward, Y increasing downward.
+        // Uses fillRect for the two bars instead of manual triangle pairs.
         const mouse_x = self.mouse_state.x;
         const mouse_y = self.mouse_state.y;
         const crosshair_size: f32 = 8.0;
         const crosshair_thickness: f32 = 2.0;
 
-        // Horizontal bar of crosshair (two triangles forming a rectangle)
-        renderer.queueTriangle(
-            .{
-                .{ mouse_x - crosshair_size, mouse_y - crosshair_thickness },
-                .{ mouse_x + crosshair_size, mouse_y - crosshair_thickness },
-                .{ mouse_x + crosshair_size, mouse_y + crosshair_thickness },
-            },
-            .{ Color.white, Color.white, Color.white },
-        );
-        renderer.queueTriangle(
-            .{
-                .{ mouse_x - crosshair_size, mouse_y - crosshair_thickness },
-                .{ mouse_x + crosshair_size, mouse_y + crosshair_thickness },
-                .{ mouse_x - crosshair_size, mouse_y + crosshair_thickness },
-            },
-            .{ Color.white, Color.white, Color.white },
+        // Horizontal bar of crosshair
+        canvas.fillRect(
+            mouse_x - crosshair_size,
+            mouse_y - crosshair_thickness,
+            crosshair_size * 2.0,
+            crosshair_thickness * 2.0,
+            Color.white,
         );
 
-        // Vertical bar of crosshair (two triangles forming a rectangle)
-        renderer.queueTriangle(
-            .{
-                .{ mouse_x - crosshair_thickness, mouse_y - crosshair_size },
-                .{ mouse_x + crosshair_thickness, mouse_y - crosshair_size },
-                .{ mouse_x + crosshair_thickness, mouse_y + crosshair_size },
-            },
-            .{ Color.white, Color.white, Color.white },
-        );
-        renderer.queueTriangle(
-            .{
-                .{ mouse_x - crosshair_thickness, mouse_y - crosshair_size },
-                .{ mouse_x + crosshair_thickness, mouse_y + crosshair_size },
-                .{ mouse_x - crosshair_thickness, mouse_y + crosshair_size },
-            },
-            .{ Color.white, Color.white, Color.white },
+        // Vertical bar of crosshair
+        canvas.fillRect(
+            mouse_x - crosshair_thickness,
+            mouse_y - crosshair_size,
+            crosshair_thickness * 2.0,
+            crosshair_size * 2.0,
+            Color.white,
         );
 
         // Mouse button state indicators - three squares in bottom-left area.
@@ -529,7 +513,6 @@ pub const App = struct {
         const btn_size: f32 = 20.0;
         const btn_spacing: f32 = 25.0;
 
-        // Helper to draw a button indicator (two triangles forming a square)
         const btn_colors = [3]struct { pressed: Color, released: Color }{
             .{ .pressed = Color.red, .released = Color.rgb(0.3, 0.0, 0.0) }, // Left: Red
             .{ .pressed = Color.green, .released = Color.rgb(0.0, 0.3, 0.0) }, // Right: Green
@@ -545,24 +528,7 @@ pub const App = struct {
             const x = btn_base_x + @as(f32, @floatFromInt(i)) * btn_spacing;
             const color = if (btn_states[i]) btn_colors[i].pressed else btn_colors[i].released;
 
-            // First triangle of square (top-left half)
-            renderer.queueTriangle(
-                .{
-                    .{ x, btn_base_y },
-                    .{ x + btn_size, btn_base_y },
-                    .{ x, btn_base_y + btn_size },
-                },
-                .{ color, color, color },
-            );
-            // Second triangle of square (bottom-right half)
-            renderer.queueTriangle(
-                .{
-                    .{ x + btn_size, btn_base_y },
-                    .{ x + btn_size, btn_base_y + btn_size },
-                    .{ x, btn_base_y + btn_size },
-                },
-                .{ color, color, color },
-            );
+            canvas.fillRect(x, btn_base_y, btn_size, btn_size, color);
         }
 
         // Z-order test: Overlapping triangles to verify painter's algorithm.
@@ -580,7 +546,7 @@ pub const App = struct {
         const overlap_offset: f32 = 20.0; // Horizontal offset between triangles
 
         // First triangle (Red) - drawn first, should be at the bottom
-        renderer.queueTriangle(
+        canvas.fillTriangle(
             .{
                 .{ overlap_base_x, overlap_base_y + overlap_size }, // Bottom-left
                 .{ overlap_base_x + overlap_size, overlap_base_y + overlap_size }, // Bottom-right
@@ -590,7 +556,7 @@ pub const App = struct {
         );
 
         // Second triangle (Green) - drawn second, should be in the middle
-        renderer.queueTriangle(
+        canvas.fillTriangle(
             .{
                 .{ overlap_base_x + overlap_offset, overlap_base_y + overlap_size }, // Bottom-left
                 .{ overlap_base_x + overlap_offset + overlap_size, overlap_base_y + overlap_size }, // Bottom-right
@@ -600,7 +566,7 @@ pub const App = struct {
         );
 
         // Third triangle (Blue) - drawn last, should be on top
-        renderer.queueTriangle(
+        canvas.fillTriangle(
             .{
                 .{ overlap_base_x + 2.0 * overlap_offset, overlap_base_y + overlap_size }, // Bottom-left
                 .{ overlap_base_x + 2.0 * overlap_offset + overlap_size, overlap_base_y + overlap_size }, // Bottom-right
@@ -627,7 +593,7 @@ pub const App = struct {
             };
         }
 
-        renderer.queueTriangle(
+        canvas.fillTriangle(
             rotating_vertices,
             .{
                 Color.fromHex(0x00FF88), // Bright green
@@ -645,7 +611,7 @@ pub const App = struct {
 
         // Equilateral-ish triangle centered at the stored position.
         // Apex points upward, base at the bottom.
-        renderer.queueTriangle(
+        canvas.fillTriangle(
             .{
                 .{ tri_x, tri_y - tri_size }, // Top apex
                 .{ tri_x - tri_size, tri_y + tri_size * 0.6 }, // Bottom-left
