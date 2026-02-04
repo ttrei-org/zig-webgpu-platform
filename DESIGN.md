@@ -299,8 +299,10 @@ const Color = struct {
 
 ### 5.2 Application Lifecycle
 
+The platform interacts with the application through an `AppInterface` vtable (defined in `app_interface.zig`), enabling runtime polymorphism over application implementations. The concrete `App` in `app.zig` is one such implementation, which provides an `appInterface()` method returning the vtable. This decouples the platform from any specific application struct.
+
 ```zig
-// The platform calls these on the application each frame:
+// The platform calls these on the application each frame (via AppInterface vtable):
 
 fn update(delta_time: f32, mouse_state: MouseState) void;  // State update
 fn render(canvas: *Canvas) void;                            // Draw commands
@@ -346,11 +348,11 @@ Resolution independence. Applications draw at a fixed logical size, and the plat
 
 ### Phase 1: Solidify the Canvas API (current focus)
 
-- [ ] Extract `Color` to its own module (remove app dependency on `renderer.zig`)
-- [ ] Define an `App` interface/trait so the platform doesn't depend on a concrete App struct
-- [ ] Add `strokeRect`, `strokeCircle`, `drawPolyline`
-- [ ] Add alpha blending support in the render pipeline
-- [ ] Ensure mouse coordinates are consistently in logical viewport space on all backends
+- [x] Extract `Color` to its own module (remove app dependency on `renderer.zig`)
+- [x] Define an `App` interface/trait so the platform doesn't depend on a concrete App struct
+- [x] Add `strokeRect`, `strokeCircle`, `drawPolyline`
+- [x] Add alpha blending support in the render pipeline
+- [x] Ensure mouse coordinates are consistently in logical viewport space on all backends
 - [ ] Write comprehensive Canvas API documentation
 
 ### Phase 2: Robustness
@@ -375,6 +377,7 @@ Resolution independence. Applications draw at a fixed logical size, and the plat
 | `src/platform/headless.zig` | 222 | Headless backend | Internal |
 | `src/main.zig` | 711 | Frame orchestration + entry | Internal |
 | `src/app.zig` | 743 | Demo application | Example/Demo |
+| `src/app_interface.zig` | 120 | Application interface (vtable) | Internal |
 | `src/shaders/triangle.wgsl` | 69 | GPU shader | Internal |
 | `web/index.html` | 198 | Web host page | Web infra |
 | `web/wasm_bindings.js` | 1527 | JS WebGPU bridge | Web infra |
