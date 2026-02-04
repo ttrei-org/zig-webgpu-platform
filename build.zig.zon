@@ -25,11 +25,10 @@
             .hash = "N-V-__8AAK7XUQNKNRnv1J6i189jtURJKjp3HTftoyD4Y4CB",
             .lazy = true,
         },
-        .dawn_aarch64_linux_gnu = .{
-            .url = "https://github.com/michal-z/webgpu_dawn-aarch64-linux-gnu/archive/c1f55e740a62f6942ff046e709ecd509a005dbeb.tar.gz",
-            .hash = "N-V-__8AAJ-wTwNc0T9oSflO92iO6IxrdMeRil37UU-KQD_M",
-            .lazy = true,
-        },
+        // dawn_aarch64_linux_gnu intentionally removed: the upstream prebuilt
+        // (michal-z/webgpu_dawn-aarch64-linux-gnu commit c1f55e7) contains x86-64
+        // objects mislabeled as aarch64. build.zig guards against this target.
+        // Re-add when upstream publishes a correct aarch64 binary.
         .dawn_x86_64_windows_gnu = .{
             .url = "https://github.com/michal-z/webgpu_dawn-x86_64-windows-gnu/archive/d3a68014e6b6b53fd330a0ccba99e4dcfffddae5.tar.gz",
             .hash = "N-V-__8AAGsYnAT5RIzeAu881RveLghQ1EidqgVBVx10gVTo",

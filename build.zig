@@ -57,6 +57,20 @@ pub fn build(b: *std.Build) void {
     // Native-only: Link Dawn/WebGPU and system dependencies
     // Emscripten uses browser's WebGPU implementation
     if (is_native) {
+        // Guard: the upstream Dawn prebuilt for aarch64-linux-gnu contains
+        // x86-64 objects (upstream bug, unfixed since July 2023).
+        // Fail early with a clear message instead of hundreds of linker errors.
+        if (target_os == .linux and target.result.cpu.arch.isAARCH64()) {
+            std.log.err(
+                "aarch64-linux-gnu native builds are not supported: the upstream Dawn " ++
+                    "prebuilt (michal-z/webgpu_dawn-aarch64-linux-gnu) contains x86-64 " ++
+                    "objects instead of aarch64 objects. See bead bd-1v1n for details. " ++
+                    "WASM builds (-Dtarget=wasm32-emscripten) work on all architectures.",
+                .{},
+            );
+            return;
+        }
+
         const zgpu_build = @import("zgpu");
         zgpu_build.addLibraryPathsTo(exe);
         zgpu_build.linkSystemDeps(b, exe);
@@ -71,14 +85,12 @@ pub fn build(b: *std.Build) void {
         exe.linkLibCpp();
 
         // Link X11 on Linux for Dawn's surface support.
-        // For cross-compilation (e.g. aarch64-linux-gnu), the system_sdk
-        // provides the X11 library since it won't be on the host system.
+        // For cross-compilation, the system_sdk provides the X11 library
+        // since it won't be on the host system.
         if (target_os == .linux) {
             if (b.lazyDependency("system_sdk", .{})) |system_sdk| {
                 if (target.result.cpu.arch.isX86()) {
                     exe.root_module.addLibraryPath(system_sdk.path("linux/lib/x86_64-linux-gnu"));
-                } else if (target.result.cpu.arch.isAARCH64()) {
-                    exe.root_module.addLibraryPath(system_sdk.path("linux/lib/aarch64-linux-gnu"));
                 }
             }
             exe.linkSystemLibrary("X11");
