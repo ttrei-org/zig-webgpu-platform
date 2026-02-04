@@ -485,7 +485,10 @@ fn runHeadless(config: Config) void {
     log.info("WebGPU headless initialization complete - rendering to offscreen texture", .{});
 
     // Create an OffscreenRenderTarget for headless rendering
-    var offscreen_target = renderer.createOffscreenRenderTarget(config.width, config.height);
+    var offscreen_target = renderer.createOffscreenRenderTarget(config.width, config.height) catch |err| {
+        log.err("failed to create offscreen render target: {}", .{err});
+        return;
+    };
     defer offscreen_target.deinit();
     const render_target = offscreen_target.asRenderTarget();
 

@@ -27,6 +27,10 @@ pub const RenderTargetError = error{
     TextureViewAcquisitionFailed,
     /// Failed to resize the render target.
     ResizeFailed,
+    /// Failed to create a GPU texture for the render target.
+    TextureCreationFailed,
+    /// Failed to create a staging buffer for GPU readback.
+    BufferCreationFailed,
 };
 
 /// RenderTarget interface for abstracting over different rendering destinations.
@@ -374,7 +378,7 @@ pub const OffscreenRenderTarget = struct {
     /// Initialize an OffscreenRenderTarget with the specified dimensions.
     ///
     /// Creates a texture with:
-    /// - Format: RGBA8Unorm (for easy PNG export)
+    /// - Format: BGRA8Unorm (to match all backends)
     /// - Usage: RENDER_ATTACHMENT | COPY_SRC
     /// - Dimension: 2D
     ///
@@ -386,10 +390,16 @@ pub const OffscreenRenderTarget = struct {
     /// - device: WebGPU device for resource creation
     /// - width: Texture width in pixels
     /// - height: Texture height in pixels
-    pub fn init(device: zgpu.wgpu.Device, width: u32, height: u32) Self {
-        const texture = createOffscreenTexture(device, width, height);
-        const texture_view = createTextureView(texture);
-        const staging_buffer = createStagingBuffer(device, width, height);
+    ///
+    /// Returns an error if GPU resource creation fails.
+    pub fn init(device: zgpu.wgpu.Device, width: u32, height: u32) RenderTargetError!Self {
+        const texture = try createOffscreenTexture(device, width, height);
+        errdefer texture.release();
+
+        const texture_view = try createTextureView(texture);
+        errdefer texture_view.release();
+
+        const staging_buffer = try createStagingBuffer(device, width, height);
 
         var self: Self = .{
             .texture = texture,
@@ -679,15 +689,30 @@ pub const OffscreenRenderTarget = struct {
             return;
         }
 
-        // Release old resources.
+        // Create new resources before releasing old ones.
+        // If creation fails, the old resources remain valid.
+        const new_texture = createOffscreenTexture(self.device, width, height) catch |err| {
+            log.err("failed to create new offscreen texture during resize to {}x{}", .{ width, height });
+            return err;
+        };
+        const new_view = createTextureView(new_texture) catch |err| {
+            new_texture.release();
+            return err;
+        };
+        const new_staging = createStagingBuffer(self.device, width, height) catch |err| {
+            new_view.release();
+            new_texture.release();
+            return err;
+        };
+
+        // Release old resources now that new ones are ready.
         self.staging_buffer.release();
         self.texture_view.release();
         self.texture.release();
 
-        // Create new resources with updated dimensions.
-        self.texture = createOffscreenTexture(self.device, width, height);
-        self.texture_view = createTextureView(self.texture);
-        self.staging_buffer = createStagingBuffer(self.device, width, height);
+        self.texture = new_texture;
+        self.texture_view = new_view;
+        self.staging_buffer = new_staging;
         self.width = width;
         self.height = height;
 
@@ -697,8 +722,9 @@ pub const OffscreenRenderTarget = struct {
     }
 
     /// Create an offscreen texture with RENDER_ATTACHMENT | COPY_SRC usage.
-    fn createOffscreenTexture(device: zgpu.wgpu.Device, width: u32, height: u32) zgpu.wgpu.Texture {
-        return device.createTexture(.{
+    /// Returns an error if the device fails to create the texture (e.g., out of memory).
+    fn createOffscreenTexture(device: zgpu.wgpu.Device, width: u32, height: u32) RenderTargetError!zgpu.wgpu.Texture {
+        const texture = device.createTexture(.{
             .next_in_chain = null,
             .label = "Offscreen Render Target Texture",
             .usage = .{ .render_attachment = true, .copy_src = true },
@@ -714,11 +740,18 @@ pub const OffscreenRenderTarget = struct {
             .view_format_count = 0,
             .view_formats = null,
         });
+
+        if (@intFromPtr(texture) == 0) {
+            log.err("offscreen texture creation returned null for {}x{}", .{ width, height });
+            return RenderTargetError.TextureCreationFailed;
+        }
+        return texture;
     }
 
     /// Create a texture view for the offscreen texture.
-    fn createTextureView(texture: zgpu.wgpu.Texture) zgpu.wgpu.TextureView {
-        return texture.createView(.{
+    /// Returns an error if the texture view cannot be created.
+    fn createTextureView(texture: zgpu.wgpu.Texture) RenderTargetError!zgpu.wgpu.TextureView {
+        const view = texture.createView(.{
             .next_in_chain = null,
             .label = "Offscreen Render Target View",
             .format = .bgra8_unorm,
@@ -729,6 +762,12 @@ pub const OffscreenRenderTarget = struct {
             .array_layer_count = 1,
             .aspect = .all,
         });
+
+        if (@intFromPtr(view) == 0) {
+            log.err("offscreen texture view creation returned null", .{});
+            return RenderTargetError.TextureCreationFailed;
+        }
+        return view;
     }
 
     /// Create a staging buffer for GPU-to-CPU pixel readback.
@@ -738,17 +777,24 @@ pub const OffscreenRenderTarget = struct {
     ///
     /// Size is calculated as aligned_bytes_per_row * height to satisfy WebGPU's
     /// 256-byte row alignment requirement for texture copies.
-    fn createStagingBuffer(device: zgpu.wgpu.Device, width: u32, height: u32) zgpu.wgpu.Buffer {
+    /// Returns an error if the buffer cannot be allocated (e.g., out of GPU memory).
+    fn createStagingBuffer(device: zgpu.wgpu.Device, width: u32, height: u32) RenderTargetError!zgpu.wgpu.Buffer {
         const aligned_bytes_per_row = calcAlignedBytesPerRow(width);
         const buffer_size: u64 = @as(u64, aligned_bytes_per_row) * @as(u64, height);
 
-        return device.createBuffer(.{
+        const buffer = device.createBuffer(.{
             .next_in_chain = null,
             .label = "Offscreen Staging Buffer",
             .usage = .{ .copy_dst = true, .map_read = true },
             .size = buffer_size,
             .mapped_at_creation = .false,
         });
+
+        if (@intFromPtr(buffer) == 0) {
+            log.err("offscreen staging buffer creation returned null ({} bytes)", .{buffer_size});
+            return RenderTargetError.BufferCreationFailed;
+        }
+        return buffer;
     }
 };
 

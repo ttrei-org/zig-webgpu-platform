@@ -91,6 +91,16 @@ pub const RendererError = error{
     PipelineCreationFailed,
     /// Failed to take screenshot (buffer mapping or file I/O error).
     ScreenshotFailed,
+    /// Failed to create a GPU buffer (vertex, uniform, or staging).
+    BufferCreationFailed,
+    /// Failed to create a bind group layout or bind group.
+    BindGroupCreationFailed,
+    /// Failed to create a pipeline layout.
+    PipelineLayoutCreationFailed,
+    /// Failed to create a GPU texture or texture view.
+    TextureCreationFailed,
+    /// Failed to create a command encoder.
+    CommandEncoderCreationFailed,
 };
 
 /// Uniform buffer data for coordinate transformation.
@@ -373,7 +383,7 @@ pub const Renderer = struct {
         errdefer shader_module.release();
 
         // Create bind group layout for uniform buffer (screen dimensions)
-        const bind_group_layout = createBindGroupLayout(device);
+        const bind_group_layout = try createBindGroupLayout(device);
         errdefer bind_group_layout.release();
         log.debug("bind group layout created for uniforms", .{});
 
@@ -385,6 +395,10 @@ pub const Renderer = struct {
             .bind_group_layout_count = bind_group_layouts.len,
             .bind_group_layouts = &bind_group_layouts,
         });
+        if (@intFromPtr(pipeline_layout) == 0) {
+            log.err("pipeline layout creation returned null", .{});
+            return RendererError.PipelineLayoutCreationFailed;
+        }
         errdefer pipeline_layout.release();
         log.debug("pipeline layout created with bind group layout in slot 0", .{});
 
@@ -393,18 +407,19 @@ pub const Renderer = struct {
             log.err("failed to create render pipeline", .{});
             return RendererError.PipelineCreationFailed;
         };
-        // No errdefer needed for render_pipeline - it's the last failable operation,
-        // and remaining operations below are infallible.
+        errdefer render_pipeline.release();
 
         // Create dynamic vertex buffer
-        const vertex_result = createVertexBuffer(device);
+        const vertex_result = try createVertexBuffer(device);
+        errdefer vertex_result.buffer.release();
         log.info("dynamic vertex buffer created: {} vertices capacity ({} bytes)", .{
             vertex_result.capacity,
             @as(u64, vertex_result.capacity) * @sizeOf(Vertex),
         });
 
         // Create uniform buffer for screen dimensions
-        const uniform_buffer = createUniformBuffer(device);
+        const uniform_buffer = try createUniformBuffer(device);
+        errdefer uniform_buffer.release();
         log.info("uniform buffer created for screen dimensions", .{});
 
         // Initialize uniform buffer with current screen dimensions
@@ -415,7 +430,7 @@ pub const Renderer = struct {
         log.info("uniform buffer initialized with screen size: {}x{}", .{ width, height });
 
         // Create bind group containing the uniform buffer
-        const bind_group = createBindGroup(device, bind_group_layout, uniform_buffer);
+        const bind_group = try createBindGroup(device, bind_group_layout, uniform_buffer);
         log.info("bind group created with uniform buffer", .{});
 
         return .{
@@ -504,6 +519,16 @@ pub const Renderer = struct {
                 .present_mode = .fifo, // VSync enabled
             },
         );
+        if (@intFromPtr(swapchain) == 0) {
+            log.err("swap chain creation returned null", .{});
+            queue.release();
+            device.release();
+            adapter.release();
+            surface.release();
+            instance.release();
+            dniDestroy(native_instance);
+            return RendererError.SwapChainCreationFailed;
+        }
         log.info("WebGPU swap chain created: {}x{}", .{ width, height });
 
         // Initialize shared GPU resources (shader, pipeline, buffers, bind group).
@@ -800,7 +825,8 @@ pub const Renderer = struct {
 
     /// Create an OffscreenRenderTarget for headless rendering.
     /// Use this instead of createSwapChainRenderTarget() in headless mode.
-    pub fn createOffscreenRenderTarget(self: *Self, width: u32, height: u32) OffscreenRenderTarget {
+    /// Returns an error if GPU resource creation fails (texture or staging buffer).
+    pub fn createOffscreenRenderTarget(self: *Self, width: u32, height: u32) render_target.RenderTargetError!OffscreenRenderTarget {
         return OffscreenRenderTarget.init(self.device, width, height);
     }
 
@@ -861,6 +887,11 @@ pub const Renderer = struct {
             .next_in_chain = null,
             .label = "Frame Command Encoder",
         });
+
+        if (@intFromPtr(command_encoder) == 0) {
+            log.err("command encoder creation returned null — device may be lost", .{});
+            return RendererError.CommandEncoderCreationFailed;
+        }
 
         log.debug("frame begun", .{});
 
@@ -1139,6 +1170,12 @@ pub const Renderer = struct {
             },
         );
 
+        if (@intFromPtr(swapchain) == 0) {
+            log.err("swap chain recreation returned null for {}x{}", .{ width, height });
+            self.swapchain = null;
+            return RendererError.SwapChainCreationFailed;
+        }
+
         self.swapchain = swapchain;
         self.swapchain_width = width;
         self.swapchain_height = height;
@@ -1274,8 +1311,9 @@ pub const Renderer = struct {
     /// The buffer is reused each frame - vertices are uploaded via queue.writeBuffer().
     /// Usage: VERTEX (for binding as vertex buffer) | COPY_DST (for dynamic updates).
     ///
-    /// Returns the buffer and its capacity.
-    fn createVertexBuffer(device: zgpu.wgpu.Device) struct { buffer: zgpu.wgpu.Buffer, capacity: u32 } {
+    /// Returns the buffer and its capacity, or an error if buffer creation fails
+    /// (e.g., out of GPU memory).
+    fn createVertexBuffer(device: zgpu.wgpu.Device) RendererError!struct { buffer: zgpu.wgpu.Buffer, capacity: u32 } {
         const buffer_size: u64 = @as(u64, max_vertex_capacity) * @sizeOf(Vertex);
 
         // Create buffer with VERTEX | COPY_DST usage for dynamic vertex data.
@@ -1287,6 +1325,11 @@ pub const Renderer = struct {
             .size = buffer_size,
             .mapped_at_creation = .false,
         });
+
+        if (@intFromPtr(buffer) == 0) {
+            log.err("vertex buffer creation returned null (requested {} bytes)", .{buffer_size});
+            return RendererError.BufferCreationFailed;
+        }
 
         return .{ .buffer = buffer, .capacity = max_vertex_capacity };
     }
@@ -1309,7 +1352,7 @@ pub const Renderer = struct {
     /// The buffer is created with UNIFORM | COPY_DST usage to allow:
     /// - Binding as a uniform buffer in shaders (UNIFORM)
     /// - Updating via queue.writeBuffer() each frame or on resize (COPY_DST)
-    fn createUniformBuffer(device: zgpu.wgpu.Device) zgpu.wgpu.Buffer {
+    fn createUniformBuffer(device: zgpu.wgpu.Device) RendererError!zgpu.wgpu.Buffer {
         const buffer = device.createBuffer(.{
             .next_in_chain = null,
             .label = "Screen Dimensions Uniform Buffer",
@@ -1318,6 +1361,11 @@ pub const Renderer = struct {
             .mapped_at_creation = .false,
         });
 
+        if (@intFromPtr(buffer) == 0) {
+            log.err("uniform buffer creation returned null", .{});
+            return RendererError.BufferCreationFailed;
+        }
+
         return buffer;
     }
 
@@ -1325,7 +1373,7 @@ pub const Renderer = struct {
     /// Configures: binding 0, visibility VERTEX (used in vertex shader), buffer type Uniform.
     /// This layout is used both to create the bind group and to define the pipeline layout.
     /// The layout defines the interface between Zig code and shader for screen dimensions.
-    fn createBindGroupLayout(device: zgpu.wgpu.Device) zgpu.wgpu.BindGroupLayout {
+    fn createBindGroupLayout(device: zgpu.wgpu.Device) RendererError!zgpu.wgpu.BindGroupLayout {
         // Define the uniform buffer binding entry.
         // Binding 0: screen dimensions uniform buffer, visible to vertex shader.
         const layout_entries = [_]zgpu.wgpu.BindGroupLayoutEntry{
@@ -1363,6 +1411,11 @@ pub const Renderer = struct {
             .entries = &layout_entries,
         });
 
+        if (@intFromPtr(layout) == 0) {
+            log.err("bind group layout creation returned null", .{});
+            return RendererError.BindGroupCreationFailed;
+        }
+
         return layout;
     }
 
@@ -1373,7 +1426,7 @@ pub const Renderer = struct {
         device: zgpu.wgpu.Device,
         layout: zgpu.wgpu.BindGroupLayout,
         uniform_buffer: zgpu.wgpu.Buffer,
-    ) zgpu.wgpu.BindGroup {
+    ) RendererError!zgpu.wgpu.BindGroup {
         // Define the binding entry for the uniform buffer.
         // Binding 0 with offset 0 and size covering the full uniform buffer.
         const entries = [_]zgpu.wgpu.BindGroupEntry{
@@ -1395,6 +1448,11 @@ pub const Renderer = struct {
             .entry_count = entries.len,
             .entries = &entries,
         });
+
+        if (@intFromPtr(bind_group) == 0) {
+            log.err("bind group creation returned null", .{});
+            return RendererError.BindGroupCreationFailed;
+        }
 
         return bind_group;
     }
@@ -1515,7 +1573,7 @@ pub const Renderer = struct {
                     .next_in_chain = null,
                     .label = "Default Queue",
                 },
-                .device_lost_callback = null,
+                .device_lost_callback = &deviceLostCallback,
                 .device_lost_user_data = null,
             },
             &deviceCallback,
@@ -1531,6 +1589,7 @@ pub const Renderer = struct {
     }
 
     /// Error callback for WebGPU validation errors.
+    /// Logs all uncaptured GPU errors with type and message for debugging.
     fn deviceErrorCallback(
         err_type: zgpu.wgpu.ErrorType,
         message: ?[*:0]const u8,
@@ -1538,6 +1597,18 @@ pub const Renderer = struct {
     ) callconv(.c) void {
         const msg = message orelse "unknown error";
         log.err("WebGPU error ({}): {s}", .{ err_type, msg });
+    }
+
+    /// Callback for WebGPU device loss events.
+    /// Device loss can happen due to driver crashes, GPU hangs, or adapter removal.
+    /// Logs the reason so users can diagnose hardware/driver issues.
+    fn deviceLostCallback(
+        reason: zgpu.wgpu.DeviceLostReason,
+        message: ?[*:0]const u8,
+        _: ?*anyopaque,
+    ) callconv(.c) void {
+        const msg = message orelse "unknown reason";
+        log.err("WebGPU device lost (reason={}): {s}", .{ reason, msg });
     }
 
     /// Callback for device request - stores the result in the response struct.
@@ -1686,7 +1757,8 @@ pub const Renderer = struct {
 
     /// Ensure screenshot resources exist and match current swap chain dimensions.
     /// Creates or recreates the screenshot texture and staging buffer if needed.
-    fn ensureScreenshotResources(self: *Self) void {
+    /// Returns an error if GPU resource creation fails.
+    fn ensureScreenshotResources(self: *Self) RendererError!void {
         const width = self.swapchain_width;
         const height = self.swapchain_height;
 
@@ -1711,7 +1783,7 @@ pub const Renderer = struct {
         // Create screenshot texture as a render target with copy_src.
         // render_attachment: we render to this texture
         // copy_src: we copy from this texture to the staging buffer
-        self.screenshot_texture = self.device.createTexture(.{
+        const texture = self.device.createTexture(.{
             .next_in_chain = null,
             .label = "Screenshot Texture",
             .usage = .{ .render_attachment = true, .copy_src = true },
@@ -1728,18 +1800,33 @@ pub const Renderer = struct {
             .view_formats = null,
         });
 
+        if (@intFromPtr(texture) == 0) {
+            log.err("screenshot texture creation returned null for {}x{}", .{ width, height });
+            return RendererError.TextureCreationFailed;
+        }
+        self.screenshot_texture = texture;
+
         // Create staging buffer for CPU readback.
         // Size = aligned_bytes_per_row * height.
         const aligned_bytes_per_row = calcAlignedBytesPerRow(width);
         const buffer_size: u64 = @as(u64, aligned_bytes_per_row) * @as(u64, height);
 
-        self.screenshot_staging_buffer = self.device.createBuffer(.{
+        const staging_buffer = self.device.createBuffer(.{
             .next_in_chain = null,
             .label = "Screenshot Staging Buffer",
             .usage = .{ .map_read = true, .copy_dst = true },
             .size = buffer_size,
             .mapped_at_creation = .false,
         });
+
+        if (@intFromPtr(staging_buffer) == 0) {
+            log.err("screenshot staging buffer creation returned null ({} bytes)", .{buffer_size});
+            // Clean up the texture we just created
+            texture.release();
+            self.screenshot_texture = null;
+            return RendererError.BufferCreationFailed;
+        }
+        self.screenshot_staging_buffer = staging_buffer;
 
         self.screenshot_width = width;
         self.screenshot_height = height;
@@ -1796,7 +1883,7 @@ pub const Renderer = struct {
     fn takeScreenshot(self: *Self, filename: []const u8) RendererError!void {
 
         // Ensure screenshot resources exist
-        self.ensureScreenshotResources();
+        try self.ensureScreenshotResources();
 
         const screenshot_texture = self.screenshot_texture orelse {
             log.err("failed to create screenshot texture", .{});
@@ -1824,6 +1911,10 @@ pub const Renderer = struct {
             .array_layer_count = 1,
             .aspect = .all,
         });
+        if (@intFromPtr(screenshot_view) == 0) {
+            log.err("screenshot texture view creation returned null", .{});
+            return RendererError.TextureCreationFailed;
+        }
         defer screenshot_view.release();
 
         // Create a command encoder for rendering and copy operations
@@ -1831,6 +1922,10 @@ pub const Renderer = struct {
             .next_in_chain = null,
             .label = "Screenshot Encoder",
         });
+        if (@intFromPtr(encoder) == 0) {
+            log.err("screenshot command encoder creation returned null", .{});
+            return RendererError.CommandEncoderCreationFailed;
+        }
 
         // Render the scene to the screenshot texture
         const color_attachment: zgpu.wgpu.RenderPassColorAttachment = .{
@@ -1944,6 +2039,10 @@ pub const Renderer = struct {
             .size = buffer_size,
             .mapped_at_creation = .false,
         });
+        if (@intFromPtr(staging_buffer) == 0) {
+            log.err("offscreen staging buffer creation returned null ({} bytes)", .{buffer_size});
+            return RendererError.BufferCreationFailed;
+        }
         defer staging_buffer.release();
 
         // Create a command encoder for copy operations
@@ -1951,6 +2050,10 @@ pub const Renderer = struct {
             .next_in_chain = null,
             .label = "Offscreen Screenshot Encoder",
         });
+        if (@intFromPtr(encoder) == 0) {
+            log.err("offscreen screenshot command encoder creation returned null", .{});
+            return RendererError.CommandEncoderCreationFailed;
+        }
 
         // Copy from offscreen texture to staging buffer
         encoder.copyTextureToBuffer(
@@ -2321,6 +2424,12 @@ test "Renderer error types are defined" {
         RendererError.SwapChainCreationFailed,
         RendererError.ShaderCompilationFailed,
         RendererError.PipelineCreationFailed,
+        RendererError.ScreenshotFailed,
+        RendererError.BufferCreationFailed,
+        RendererError.BindGroupCreationFailed,
+        RendererError.PipelineLayoutCreationFailed,
+        RendererError.TextureCreationFailed,
+        RendererError.CommandEncoderCreationFailed,
     };
-    try std.testing.expectEqual(@as(usize, 7), expected_errors.len);
+    try std.testing.expectEqual(@as(usize, 13), expected_errors.len);
 }
