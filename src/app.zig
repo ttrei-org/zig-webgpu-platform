@@ -246,249 +246,169 @@ pub const App = struct {
     /// Parameters:
     /// - canvas: Pointer to the Canvas for drawing shapes.
     pub fn render(self: *const Self, canvas: *Canvas) void {
-        // Static test pattern demonstrating the Canvas shape API.
-        // Creates a radial "starburst" pattern with triangles emanating from center,
-        // plus corner accent triangles. Showcases Color constants and helpers.
-        //
-        // Uses viewport dimensions so the scene scales to any physical resolution.
+        // Demo scene showcasing all Canvas primitives: fillRect, fillRectGradient,
+        // fillCircle, fillTriangle, drawLine, fillPolygon.
+        // All positions use viewport dimensions for resolution independence.
 
         const vp_w = canvas.viewport.logical_width;
         const vp_h = canvas.viewport.logical_height;
-        const center_x: f32 = vp_w / 2.0;
-        const center_y: f32 = vp_h / 2.0;
 
-        // Radial triangles forming a starburst pattern around the center.
-        // Each triangle has its apex at the center and base on an outer arc.
-        // Colors cycle through the spectrum for a rainbow effect.
-        const radial_colors = [_]Color{
-            Color.red,
-            Color.fromHex(0xFF8000), // Orange
-            Color.yellow,
-            Color.green,
-            Color.cyan,
-            Color.blue,
-            Color.fromHex(0x8000FF), // Purple
-            Color.magenta,
-        };
+        // -- Sky background gradient (light blue at top -> deeper blue at horizon) --
+        canvas.fillRectGradient(
+            0.0,
+            0.0,
+            vp_w,
+            vp_h * 0.7,
+            Color.fromHex(0x87CEEB), // Sky blue (top-left)
+            Color.fromHex(0x87CEEB), // Sky blue (top-right)
+            Color.fromHex(0x4A90D9), // Deeper blue (bottom-left, at horizon)
+            Color.fromHex(0x4A90D9), // Deeper blue (bottom-right, at horizon)
+        );
 
-        const num_spokes: usize = 8;
-        const inner_radius: f32 = 20.0; // Small gap at center
-        const outer_radius: f32 = 110.0;
+        // -- Ground (green rectangle covering lower portion) --
+        const ground_y = vp_h * 0.7;
+        canvas.fillRectGradient(
+            0.0,
+            ground_y,
+            vp_w,
+            vp_h * 0.3,
+            Color.fromHex(0x4CAF50), // Grass green (top)
+            Color.fromHex(0x4CAF50),
+            Color.fromHex(0x2E7D32), // Darker green (bottom)
+            Color.fromHex(0x2E7D32),
+        );
 
-        for (0..num_spokes) |i| {
-            // Angle for this spoke (evenly distributed around circle)
-            const angle: f32 = @as(f32, @floatFromInt(i)) * (std.math.tau / @as(f32, @floatFromInt(num_spokes)));
-            const next_angle: f32 = angle + std.math.tau / @as(f32, @floatFromInt(num_spokes));
-            const mid_angle: f32 = (angle + next_angle) / 2.0;
+        // -- Sun (fillCircle with warm yellow) --
+        canvas.fillCircle(vp_w * 0.82, vp_h * 0.12, 28.0, Color.fromHex(0xFFD54F), 24);
+        // Outer glow ring (slightly larger, more transparent orange)
+        canvas.fillCircle(vp_w * 0.82, vp_h * 0.12, 34.0, Color.rgba(1.0, 0.85, 0.3, 0.25), 24);
 
-            // Calculate spoke triangle vertices
-            // Apex at inner radius, base at outer radius
-            const apex_x = center_x + inner_radius * @cos(mid_angle);
-            const apex_y = center_y + inner_radius * @sin(mid_angle);
+        // -- House --
+        const house_x = vp_w * 0.22;
+        const house_y = ground_y - 70.0;
+        const house_w: f32 = 80.0;
+        const house_h: f32 = 70.0;
 
-            // Base vertices at outer radius, offset by half-width perpendicular to spoke
-            const base_left_x = center_x + outer_radius * @cos(angle);
-            const base_left_y = center_y + outer_radius * @sin(angle);
-            const base_right_x = center_x + outer_radius * @cos(next_angle);
-            const base_right_y = center_y + outer_radius * @sin(next_angle);
+        // House body
+        canvas.fillRect(house_x, house_y, house_w, house_h, Color.fromHex(0xBCAAA4));
 
-            const base_color = radial_colors[i];
-            // Create gradient by darkening the base color at the apex
-            const apex_color = Color.rgb(base_color.r * 0.3, base_color.g * 0.3, base_color.b * 0.3);
+        // Roof (triangle above the house body)
+        canvas.fillTriangle(
+            .{
+                .{ house_x - 8.0, house_y }, // Left overhang
+                .{ house_x + house_w + 8.0, house_y }, // Right overhang
+                .{ house_x + house_w / 2.0, house_y - 40.0 }, // Peak
+            },
+            .{
+                Color.fromHex(0x8D6E63), // Brown
+                Color.fromHex(0x8D6E63),
+                Color.fromHex(0x6D4C41), // Darker brown at peak
+            },
+        );
 
-            canvas.fillTriangle(
-                .{
-                    .{ apex_x, apex_y },
-                    .{ base_left_x, base_left_y },
-                    .{ base_right_x, base_right_y },
-                },
-                .{
-                    apex_color, // Dark at center
-                    base_color, // Bright at edge
-                    base_color, // Bright at edge
-                },
-            );
+        // Door
+        canvas.fillRect(house_x + house_w / 2.0 - 8.0, house_y + house_h - 30.0, 16.0, 30.0, Color.fromHex(0x5D4037));
+
+        // Windows (two small squares)
+        canvas.fillRect(house_x + 10.0, house_y + 15.0, 18.0, 18.0, Color.fromHex(0xBBDEFB));
+        canvas.fillRect(house_x + house_w - 28.0, house_y + 15.0, 18.0, 18.0, Color.fromHex(0xBBDEFB));
+
+        // Window cross-bars (drawLine)
+        // Left window
+        canvas.drawLine(house_x + 10.0, house_y + 24.0, house_x + 28.0, house_y + 24.0, 1.0, Color.fromHex(0x795548));
+        canvas.drawLine(house_x + 19.0, house_y + 15.0, house_x + 19.0, house_y + 33.0, 1.0, Color.fromHex(0x795548));
+        // Right window
+        canvas.drawLine(house_x + house_w - 28.0, house_y + 24.0, house_x + house_w - 10.0, house_y + 24.0, 1.0, Color.fromHex(0x795548));
+        canvas.drawLine(house_x + house_w - 19.0, house_y + 15.0, house_x + house_w - 19.0, house_y + 33.0, 1.0, Color.fromHex(0x795548));
+
+        // -- Tree (left side) --
+        drawTree(canvas, vp_w * 0.08, ground_y);
+
+        // -- Tree (right side, slightly larger) --
+        drawTree(canvas, vp_w * 0.62, ground_y);
+
+        // -- Fence (drawLine calls for posts and rails) --
+        const fence_start_x = house_x + house_w + 15.0;
+        const fence_y = ground_y - 25.0;
+        const post_spacing: f32 = 18.0;
+        const num_posts: usize = 5;
+
+        for (0..num_posts) |i| {
+            const px = fence_start_x + @as(f32, @floatFromInt(i)) * post_spacing;
+            // Vertical post
+            canvas.drawLine(px, fence_y, px, ground_y, 2.0, Color.fromHex(0x8D6E63));
+        }
+        // Horizontal rails
+        const fence_end_x = fence_start_x + @as(f32, @floatFromInt(num_posts - 1)) * post_spacing;
+        canvas.drawLine(fence_start_x, fence_y + 5.0, fence_end_x, fence_y + 5.0, 2.0, Color.fromHex(0xA1887F));
+        canvas.drawLine(fence_start_x, fence_y + 15.0, fence_end_x, fence_y + 15.0, 2.0, Color.fromHex(0xA1887F));
+
+        // -- Path / stepping stones (small fillRects on the ground) --
+        // A gravel path leading from the house door to the right.
+        const path_y = ground_y + 5.0;
+        const stone_w: f32 = 8.0;
+        const stone_h: f32 = 4.0;
+        var si: usize = 0;
+        while (si < 4) : (si += 1) {
+            const sx = house_x + house_w / 2.0 + 15.0 + @as(f32, @floatFromInt(si)) * 18.0;
+            canvas.fillRect(sx, path_y, stone_w, stone_h, Color.fromHex(0x9E9E9E));
         }
 
-        // Central triangle using classic RGB gradient (demonstrates color interpolation)
+        // -- Hexagon (fillPolygon) -- decorative element in the sky
+        const hex_cx = vp_w * 0.55;
+        const hex_cy = vp_h * 0.18;
+        const hex_r: f32 = 14.0;
+        var hex_points: [6][2]f32 = undefined;
+        for (0..6) |i| {
+            const angle = @as(f32, @floatFromInt(i)) * (std.math.tau / 6.0) - std.math.pi / 6.0;
+            hex_points[i] = .{
+                hex_cx + hex_r * @cos(angle),
+                hex_cy + hex_r * @sin(angle),
+            };
+        }
+        canvas.fillPolygon(&hex_points, Color.fromHex(0xFFAB40));
+
+        // -- Animated rotating shape (pentagon) demonstrating animation --
+        // Uses self.rotation_angle for frame-rate independent rotation.
+        const rot_cx = vp_w * 0.82;
+        const rot_cy = vp_h * 0.55;
+        const rot_r: f32 = 18.0;
+        const rot_sides: usize = 5;
+        var rot_points: [rot_sides][2]f32 = undefined;
+        for (0..rot_sides) |i| {
+            const angle = self.rotation_angle + @as(f32, @floatFromInt(i)) * (std.math.tau / @as(f32, @floatFromInt(rot_sides)));
+            rot_points[i] = .{
+                rot_cx + rot_r * @cos(angle),
+                rot_cy + rot_r * @sin(angle),
+            };
+        }
+        canvas.fillPolygon(&rot_points, Color.fromHex(0xE040FB));
+
+        // -- Interactive triangle -- moves to left-click position.
+        // Drawn near the end so it appears on top.
+        const tri_x = self.triangle_position[0];
+        const tri_y = self.triangle_position[1];
+        const tri_size: f32 = 20.0;
+
         canvas.fillTriangle(
             .{
-                .{ center_x, center_y - 15.0 }, // Top
-                .{ center_x - 13.0, center_y + 8.0 }, // Bottom-left
-                .{ center_x + 13.0, center_y + 8.0 }, // Bottom-right
+                .{ tri_x, tri_y - tri_size }, // Top apex
+                .{ tri_x - tri_size, tri_y + tri_size * 0.6 }, // Bottom-left
+                .{ tri_x + tri_size, tri_y + tri_size * 0.6 }, // Bottom-right
             },
             .{
-                Color.red,
-                Color.green,
-                Color.blue,
+                Color.fromHex(0xFFD700), // Gold apex
+                Color.fromHex(0xFF8C00), // Dark orange
+                Color.fromHex(0xFF8C00),
             },
         );
 
-        // Corner accent triangles demonstrating various Color API methods
-
-        // Top-left: Yellow tones using Color constant and rgb() helper
-        canvas.fillTriangle(
-            .{
-                .{ 10.0, 50.0 },
-                .{ 50.0, 50.0 },
-                .{ 30.0, 10.0 },
-            },
-            .{
-                Color.yellow,
-                Color.rgb(1.0, 0.8, 0.0), // Orange-yellow
-                Color.rgb(1.0, 1.0, 0.5), // Light yellow
-            },
-        );
-
-        // Top-right: Cyan tones using Color constant and rgb() helper
-        canvas.fillTriangle(
-            .{
-                .{ vp_w - 50.0, 50.0 },
-                .{ vp_w - 10.0, 50.0 },
-                .{ vp_w - 30.0, 10.0 },
-            },
-            .{
-                Color.cyan,
-                Color.rgb(0.0, 0.8, 1.0), // Sky blue
-                Color.rgb(0.5, 1.0, 1.0), // Light cyan
-            },
-        );
-
-        // Bottom-left: Magenta tones using Color constant and fromHex() helper
-        canvas.fillTriangle(
-            .{
-                .{ 10.0, vp_h - 50.0 },
-                .{ 50.0, vp_h - 50.0 },
-                .{ 30.0, vp_h - 10.0 },
-            },
-            .{
-                Color.magenta,
-                Color.fromHex(0xFF00AA), // Pink-magenta
-                Color.fromHex(0xAA00FF), // Purple
-            },
-        );
-
-        // Bottom-right: Grayscale using rgb() for precise control
-        canvas.fillTriangle(
-            .{
-                .{ vp_w - 50.0, vp_h - 50.0 },
-                .{ vp_w - 10.0, vp_h - 50.0 },
-                .{ vp_w - 30.0, vp_h - 10.0 },
-            },
-            .{
-                Color.white,
-                Color.rgb(0.7, 0.7, 0.7), // Light gray
-                Color.rgb(0.4, 0.4, 0.4), // Medium gray
-            },
-        );
-
-        // Position test triangles - verify screen coordinate system works at boundaries.
-        // These small markers at exact screen positions confirm coordinate transform is correct.
-        // Uses viewport dimensions for resolution independence.
-        const width: f32 = vp_w;
-        const height: f32 = vp_h;
-        const marker_size: f32 = 12.0;
-
-        // Corner markers: small triangles pointing into each corner.
-        // Tests coordinate system at extreme positions (0,0), (width,0), (0,height), (width,height).
-
-        // Top-left corner (0,0): red marker pointing into corner
-        canvas.fillTriangle(
-            .{
-                .{ 0.0, 0.0 }, // Exact corner
-                .{ marker_size, 0.0 }, // Along top edge
-                .{ 0.0, marker_size }, // Along left edge
-            },
-            .{ Color.red, Color.red, Color.red },
-        );
-
-        // Top-right corner (width,0): green marker pointing into corner
-        canvas.fillTriangle(
-            .{
-                .{ width, 0.0 }, // Exact corner
-                .{ width - marker_size, 0.0 }, // Along top edge
-                .{ width, marker_size }, // Along right edge
-            },
-            .{ Color.green, Color.green, Color.green },
-        );
-
-        // Bottom-left corner (0,height): blue marker pointing into corner
-        canvas.fillTriangle(
-            .{
-                .{ 0.0, height }, // Exact corner
-                .{ marker_size, height }, // Along bottom edge
-                .{ 0.0, height - marker_size }, // Along left edge
-            },
-            .{ Color.blue, Color.blue, Color.blue },
-        );
-
-        // Bottom-right corner (width,height): white marker pointing into corner
-        canvas.fillTriangle(
-            .{
-                .{ width, height }, // Exact corner
-                .{ width - marker_size, height }, // Along bottom edge
-                .{ width, height - marker_size }, // Along right edge
-            },
-            .{ Color.white, Color.white, Color.white },
-        );
-
-        // Edge center markers: triangles at midpoint of each edge.
-        // Verifies coordinate system works along screen boundaries.
-        const edge_marker_half: f32 = 8.0;
-        const edge_depth: f32 = 10.0;
-
-        // Top edge center: orange marker pointing down
-        canvas.fillTriangle(
-            .{
-                .{ width / 2.0, 0.0 }, // Apex at top edge center
-                .{ width / 2.0 - edge_marker_half, edge_depth }, // Base left
-                .{ width / 2.0 + edge_marker_half, edge_depth }, // Base right
-            },
-            .{
-                Color.fromHex(0xFF8000), // Orange
-                Color.fromHex(0xFF8000),
-                Color.fromHex(0xFF8000),
-            },
-        );
-
-        // Bottom edge center: cyan marker pointing up
-        canvas.fillTriangle(
-            .{
-                .{ width / 2.0, height }, // Apex at bottom edge center
-                .{ width / 2.0 - edge_marker_half, height - edge_depth }, // Base left
-                .{ width / 2.0 + edge_marker_half, height - edge_depth }, // Base right
-            },
-            .{ Color.cyan, Color.cyan, Color.cyan },
-        );
-
-        // Left edge center: yellow marker pointing right
-        canvas.fillTriangle(
-            .{
-                .{ 0.0, height / 2.0 }, // Apex at left edge center
-                .{ edge_depth, height / 2.0 - edge_marker_half }, // Base top
-                .{ edge_depth, height / 2.0 + edge_marker_half }, // Base bottom
-            },
-            .{ Color.yellow, Color.yellow, Color.yellow },
-        );
-
-        // Right edge center: magenta marker pointing left
-        canvas.fillTriangle(
-            .{
-                .{ width, height / 2.0 }, // Apex at right edge center
-                .{ width - edge_depth, height / 2.0 - edge_marker_half }, // Base top
-                .{ width - edge_depth, height / 2.0 + edge_marker_half }, // Base bottom
-            },
-            .{ Color.magenta, Color.magenta, Color.magenta },
-        );
-
-        // Mouse position debug display - visual crosshair at current mouse location.
-        // Uses fillRect for the two bars instead of manual triangle pairs.
+        // -- Mouse crosshair --
         const mouse_x = self.mouse_state.x;
         const mouse_y = self.mouse_state.y;
         const crosshair_size: f32 = 8.0;
-        const crosshair_thickness: f32 = 2.0;
+        const crosshair_thickness: f32 = 1.5;
 
-        // Horizontal bar of crosshair
         canvas.fillRect(
             mouse_x - crosshair_size,
             mouse_y - crosshair_thickness,
@@ -496,8 +416,6 @@ pub const App = struct {
             crosshair_thickness * 2.0,
             Color.white,
         );
-
-        // Vertical bar of crosshair
         canvas.fillRect(
             mouse_x - crosshair_thickness,
             mouse_y - crosshair_size,
@@ -506,19 +424,16 @@ pub const App = struct {
             Color.white,
         );
 
-        // Mouse button state indicators - three squares in bottom-left area.
-        // Each square represents a button: Left, Right, Middle (from left to right).
-        // Bright color = pressed, dim color = released.
-        // This provides visual feedback for verifying button press/release detection.
-        const btn_base_x: f32 = 60.0;
-        const btn_base_y: f32 = 200.0;
-        const btn_size: f32 = 20.0;
-        const btn_spacing: f32 = 25.0;
+        // -- Mouse button state indicators (bottom-left corner) --
+        const btn_base_x: f32 = 10.0;
+        const btn_base_y: f32 = vp_h - 20.0;
+        const btn_size: f32 = 12.0;
+        const btn_spacing: f32 = 16.0;
 
         const btn_colors = [3]struct { pressed: Color, released: Color }{
-            .{ .pressed = Color.red, .released = Color.rgb(0.3, 0.0, 0.0) }, // Left: Red
-            .{ .pressed = Color.green, .released = Color.rgb(0.0, 0.3, 0.0) }, // Right: Green
-            .{ .pressed = Color.blue, .released = Color.rgb(0.0, 0.0, 0.3) }, // Middle: Blue
+            .{ .pressed = Color.red, .released = Color.rgb(0.3, 0.0, 0.0) },
+            .{ .pressed = Color.green, .released = Color.rgb(0.0, 0.3, 0.0) },
+            .{ .pressed = Color.blue, .released = Color.rgb(0.0, 0.0, 0.3) },
         };
         const btn_states = [3]bool{
             self.mouse_state.left_pressed,
@@ -529,102 +444,40 @@ pub const App = struct {
         for (0..3) |i| {
             const x = btn_base_x + @as(f32, @floatFromInt(i)) * btn_spacing;
             const color = if (btn_states[i]) btn_colors[i].pressed else btn_colors[i].released;
-
             canvas.fillRect(x, btn_base_y, btn_size, btn_size, color);
         }
+    }
 
-        // Z-order test: Overlapping triangles to verify painter's algorithm.
-        // Since there is no depth buffer, draw order = depth order.
-        // Later-drawn triangles should appear on top of earlier ones.
-        // We draw three overlapping triangles with contrasting colors.
-        //
-        // Layout: Three triangles in upper-right quadrant, each partially
-        // overlapping the previous one. Draw order: Red -> Green -> Blue.
-        // Expected result: Blue on top, then Green, then Red at bottom.
+    /// Draw a tree at the given ground position. Trunk is a fillRect,
+    /// foliage is three stacked fillTriangles for a layered look.
+    fn drawTree(canvas: *Canvas, base_x: f32, ground_y: f32) void {
+        const trunk_w: f32 = 10.0;
+        const trunk_h: f32 = 35.0;
+        // Trunk
+        canvas.fillRect(base_x - trunk_w / 2.0, ground_y - trunk_h, trunk_w, trunk_h, Color.fromHex(0x6D4C41));
 
-        const overlap_base_x: f32 = 280.0;
-        const overlap_base_y: f32 = 50.0;
-        const overlap_size: f32 = 50.0;
-        const overlap_offset: f32 = 20.0; // Horizontal offset between triangles
+        // Three stacked triangle layers for foliage (widest at bottom, narrow at top)
+        const layers = [_]struct { w: f32, y_offset: f32, h: f32 }{
+            .{ .w = 40.0, .y_offset = 25.0, .h = 30.0 }, // Bottom layer
+            .{ .w = 32.0, .y_offset = 40.0, .h = 28.0 }, // Middle layer
+            .{ .w = 24.0, .y_offset = 55.0, .h = 26.0 }, // Top layer
+        };
 
-        // First triangle (Red) - drawn first, should be at the bottom
-        canvas.fillTriangle(
-            .{
-                .{ overlap_base_x, overlap_base_y + overlap_size }, // Bottom-left
-                .{ overlap_base_x + overlap_size, overlap_base_y + overlap_size }, // Bottom-right
-                .{ overlap_base_x + overlap_size / 2.0, overlap_base_y }, // Top
-            },
-            .{ Color.red, Color.red, Color.red },
-        );
-
-        // Second triangle (Green) - drawn second, should be in the middle
-        canvas.fillTriangle(
-            .{
-                .{ overlap_base_x + overlap_offset, overlap_base_y + overlap_size }, // Bottom-left
-                .{ overlap_base_x + overlap_offset + overlap_size, overlap_base_y + overlap_size }, // Bottom-right
-                .{ overlap_base_x + overlap_offset + overlap_size / 2.0, overlap_base_y }, // Top
-            },
-            .{ Color.green, Color.green, Color.green },
-        );
-
-        // Third triangle (Blue) - drawn last, should be on top
-        canvas.fillTriangle(
-            .{
-                .{ overlap_base_x + 2.0 * overlap_offset, overlap_base_y + overlap_size }, // Bottom-left
-                .{ overlap_base_x + 2.0 * overlap_offset + overlap_size, overlap_base_y + overlap_size }, // Bottom-right
-                .{ overlap_base_x + 2.0 * overlap_offset + overlap_size / 2.0, overlap_base_y }, // Top
-            },
-            .{ Color.blue, Color.blue, Color.blue },
-        );
-
-        // Animated rotating triangle - demonstrates smooth vsync rendering.
-        // Uses delta_time-based rotation to verify frame-rate independent animation.
-        // Positioned in the upper-left area to avoid overlap with other elements.
-        const rotating_center_x: f32 = 80.0;
-        const rotating_center_y: f32 = 100.0;
-        const rotating_radius: f32 = 35.0;
-
-        // Calculate vertices for an equilateral triangle rotated by rotation_angle.
-        // Each vertex is 120 degrees (2*pi/3) apart on a circle centered at (rotating_center_x, rotating_center_y).
-        var rotating_vertices: [3][2]f32 = undefined;
-        for (0..3) |i| {
-            const vertex_angle = self.rotation_angle + @as(f32, @floatFromInt(i)) * (std.math.tau / 3.0);
-            rotating_vertices[i] = .{
-                rotating_center_x + rotating_radius * @cos(vertex_angle),
-                rotating_center_y + rotating_radius * @sin(vertex_angle),
-            };
+        for (layers) |layer| {
+            const ly = ground_y - layer.y_offset;
+            canvas.fillTriangle(
+                .{
+                    .{ base_x - layer.w / 2.0, ly },
+                    .{ base_x + layer.w / 2.0, ly },
+                    .{ base_x, ly - layer.h },
+                },
+                .{
+                    Color.fromHex(0x388E3C),
+                    Color.fromHex(0x388E3C),
+                    Color.fromHex(0x1B5E20), // Darker at top
+                },
+            );
         }
-
-        canvas.fillTriangle(
-            rotating_vertices,
-            .{
-                Color.fromHex(0x00FF88), // Bright green
-                Color.fromHex(0x00AAFF), // Bright cyan
-                Color.fromHex(0xFF00AA), // Bright magenta
-            },
-        );
-
-        // Interactive triangle - moves to click position.
-        // Demonstrates input handling: left-click moves this triangle to the cursor location.
-        // Drawn last so it appears on top of other elements.
-        const tri_x = self.triangle_position[0];
-        const tri_y = self.triangle_position[1];
-        const tri_size: f32 = 30.0; // Half-width of the triangle base
-
-        // Equilateral-ish triangle centered at the stored position.
-        // Apex points upward, base at the bottom.
-        canvas.fillTriangle(
-            .{
-                .{ tri_x, tri_y - tri_size }, // Top apex
-                .{ tri_x - tri_size, tri_y + tri_size * 0.6 }, // Bottom-left
-                .{ tri_x + tri_size, tri_y + tri_size * 0.6 }, // Bottom-right
-            },
-            .{
-                Color.fromHex(0xFFD700), // Gold apex
-                Color.fromHex(0xFF8C00), // Dark orange bottom-left
-                Color.fromHex(0xFF8C00), // Dark orange bottom-right
-            },
-        );
     }
 
     /// Get the current frame count.
