@@ -403,6 +403,14 @@ pub const App = struct {
             },
         );
 
+        // -- Stroke rectangles (showcasing strokeRect) --
+        // Picture frame around the hexagon
+        canvas.strokeRect(hex_cx - 22.0, hex_cy - 22.0, 44.0, 44.0, 2.0, Color.fromHex(0xFFD700));
+
+        // Window frames using strokeRect (outline around each window)
+        canvas.strokeRect(house_x + 10.0, house_y + 15.0, 18.0, 18.0, 1.0, Color.fromHex(0x5D4037));
+        canvas.strokeRect(house_x + house_w - 28.0, house_y + 15.0, 18.0, 18.0, 1.0, Color.fromHex(0x5D4037));
+
         // -- Mouse crosshair --
         const mouse_x = self.mouse_state.x;
         const mouse_y = self.mouse_state.y;
