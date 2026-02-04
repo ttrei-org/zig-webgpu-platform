@@ -27,7 +27,7 @@ For headless environments (CI, SSH sessions):
 xvfb-run --auto-servernum ./scripts/web_screenshot.sh /tmp/web_screenshot.png
 ```
 
-**Note:** Web screenshots require a WebGPU-capable browser. In environments without GPU acceleration, the screenshot will show an error message. Use a machine with GPU support for visual parity testing between native and web builds.
+**Note:** The `web_screenshot.sh` script uses Chromium, which requires real GPU hardware for WebGPU. In headless/CI environments without GPU, it fails with "Failed to get WebGPU adapter". For WebGPU rendering without GPU acceleration, use Firefox with WebGPU enabled instead (see below).
 
 ### Firefox with WebGPU
 
@@ -62,10 +62,28 @@ xvfb-run --auto-servernum bash -c '
 '
 ```
 
+**Taking a screenshot that saves to a file:**
+```bash
+python serve.py > /dev/null 2>&1 &
+SERVER_PID=$!
+sleep 2
+
+xvfb-run --auto-servernum bash << 'SCRIPT'
+playwright-cli config --config=playwright-cli.json
+playwright-cli open "http://localhost:8000/"
+sleep 5
+playwright-cli run-code 'async page => { await page.screenshot({ path: "/tmp/web_firefox.png", type: "png" }); return "saved"; }'
+playwright-cli session-stop
+SCRIPT
+
+kill $SERVER_PID 2>/dev/null
+```
+
 **Key points:**
 - `firefoxUserPrefs` passes preferences to Firefox (equivalent to `-pref` command line args)
 - `xvfb-run` provides a virtual display for headed mode in headless environments
 - Run all playwright-cli commands in the same xvfb-run session to maintain the browser instance
+- `playwright-cli screenshot` doesn't save to a file path — use `run-code` with `page.screenshot()` instead
 
 ---
 
