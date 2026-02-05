@@ -366,4 +366,12 @@ Resolution independence. Applications draw at a fixed logical size, and the plat
 | `build.zig` | ~220 | Build configuration + module export | Build |
 | `create-app/build.zig` | ~40 | Build config for create-app CLI tool (exe + tests) | Tooling |
 | `create-app/build.zig.zon` | ~15 | Package manifest for create-app (no deps) | Tooling |
-| `create-app/src/main.zig` | ~550 | Scaffolding tool: CLI parsing, directory validation, code generation | Tooling |
+| `create-app/src/main.zig` | ~700 | Scaffolding tool: CLI parsing, validation, code gen, HTTP template fetching | Tooling |
+| `create-app/templates/` | — | Template files fetched at runtime during project scaffolding | Tooling |
+| `create-app/templates/AGENTS.md` | ~170 | Template AGENTS.md for scaffolded projects | Tooling |
+| `create-app/templates/DESIGN.md` | ~100 | Template DESIGN.md skeleton for scaffolded projects | Tooling |
+| `create-app/templates/serve.py` | ~150 | Template HTTP/HTTPS dev server for scaffolded projects | Tooling |
+| `create-app/templates/scripts/web_screenshot.sh` | ~75 | Template Playwright web screenshot script (uses {{PROJECT_NAME}}) | Tooling |
+| `create-app/templates/index.html` | ~200 | Template HTML host page for WASM builds (uses {{PROJECT_NAME}}) | Tooling |
+| `create-app/templates/playwright-cli.json` | ~12 | Template Playwright config (Firefox + WebGPU) | Tooling |
+| `create-app/templates/gitignore` | ~7 | Template .gitignore for scaffolded projects | Tooling |

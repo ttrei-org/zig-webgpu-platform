@@ -33,8 +33,7 @@ fn run(allocator: std.mem.Allocator) !void {
 
     printInfo("Creating project \"{s}\" in {s}...", .{ project_name, target_path });
 
-    // Subsequent steps (implemented by later beads)
-    fetchTemplates(project_name, target_path);
+    try fetchTemplates(allocator, project_name, target_path);
     try generateBuildFiles(allocator, project_name, target_path);
     initGitRepo(project_name, target_path);
 }
@@ -171,11 +170,148 @@ fn isValidZigIdentifier(name: []const u8) bool {
 }
 
 // ---------------------------------------------------------------------------
-// Stub functions for subsequent beads
+// Template fetching
 // ---------------------------------------------------------------------------
 
-fn fetchTemplates(_: []const u8, _: []const u8) void {
-    printInfo("TODO: fetch template files", .{});
+/// Base URL for fetching template files from GitHub.
+const TEMPLATE_BASE_URL = "https://raw.githubusercontent.com/ttrei-org/zig-webgpu-platform/master/create-app/templates/";
+
+/// Maximum response body size (1 MB) to prevent OOM from unexpected responses.
+const MAX_RESPONSE_SIZE = 1024 * 1024;
+
+/// Template file descriptor: source path (relative to templates/) and
+/// destination path (relative to project directory).
+const TemplateFile = struct {
+    source: []const u8,
+    dest: []const u8,
+    executable: bool = false,
+};
+
+/// Hardcoded list of template files to fetch.
+const TEMPLATE_FILES = [_]TemplateFile{
+    .{ .source = "AGENTS.md", .dest = "AGENTS.md" },
+    .{ .source = "DESIGN.md", .dest = "DESIGN.md" },
+    .{ .source = "serve.py", .dest = "serve.py", .executable = true },
+    .{ .source = "scripts/web_screenshot.sh", .dest = "scripts/web_screenshot.sh", .executable = true },
+    .{ .source = "playwright-cli.json", .dest = "playwright-cli.json" },
+    .{ .source = "gitignore", .dest = ".gitignore" },
+    .{ .source = "index.html", .dest = "web/index.html" },
+};
+
+/// Fetch all template files from GitHub, substitute placeholders, and write
+/// them into the project directory.
+fn fetchTemplates(allocator: std.mem.Allocator, project_name: []const u8, target_path: []const u8) !void {
+    var client: std.http.Client = .{ .allocator = allocator };
+    defer client.deinit();
+
+    var dir = try std.fs.openDirAbsolute(target_path, .{});
+    defer dir.close();
+
+    for (&TEMPLATE_FILES) |*tmpl| {
+        try fetchOneTemplate(allocator, &client, dir, tmpl, project_name);
+    }
+}
+
+/// Fetch a single template file, perform placeholder substitution, and write it.
+fn fetchOneTemplate(
+    allocator: std.mem.Allocator,
+    client: *std.http.Client,
+    dir: std.fs.Dir,
+    tmpl: *const TemplateFile,
+    project_name: []const u8,
+) !void {
+    printInfo("  Fetching {s}...", .{tmpl.source});
+
+    // Build the full URL.
+    const url = try std.mem.concat(allocator, u8, &.{ TEMPLATE_BASE_URL, tmpl.source });
+    defer allocator.free(url);
+
+    // Set up an allocating writer to collect the response body.
+    var body_writer: std.Io.Writer.Allocating = .init(allocator);
+    defer body_writer.deinit();
+
+    const result = client.fetch(.{
+        .location = .{ .url = url },
+        .response_writer = &body_writer.writer,
+    }) catch |err| {
+        printError("failed to fetch {s}: {s}", .{ url, @errorName(err) });
+        std.process.exit(1);
+    };
+
+    if (result.status != .ok) {
+        printError("HTTP {d} when fetching {s}", .{ @intFromEnum(result.status), url });
+        std.process.exit(1);
+    }
+
+    const response_body = body_writer.written();
+
+    // Perform {{PROJECT_NAME}} placeholder substitution.
+    const content = try substitutePlaceholder(allocator, response_body, project_name);
+    defer allocator.free(content);
+
+    // Create parent directories (e.g. "scripts/", "web/").
+    if (std.fs.path.dirname(tmpl.dest)) |parent| {
+        dir.makePath(parent) catch |err| {
+            printError("failed to create directory '{s}': {s}", .{ parent, @errorName(err) });
+            std.process.exit(1);
+        };
+    }
+
+    // Write the file.
+    var file = dir.createFile(tmpl.dest, .{}) catch |err| {
+        printError("failed to create file '{s}': {s}", .{ tmpl.dest, @errorName(err) });
+        std.process.exit(1);
+    };
+    defer file.close();
+
+    file.writeAll(content) catch |err| {
+        printError("failed to write file '{s}': {s}", .{ tmpl.dest, @errorName(err) });
+        std.process.exit(1);
+    };
+
+    // Set executable permission for scripts.
+    if (tmpl.executable) {
+        file.setPermissions(.{ .inner = .{ .mode = 0o755 } }) catch |err| {
+            printError("failed to set executable permission on '{s}': {s}", .{ tmpl.dest, @errorName(err) });
+            std.process.exit(1);
+        };
+    }
+}
+
+/// Replace all occurrences of "{{PROJECT_NAME}}" with the actual project name.
+fn substitutePlaceholder(allocator: std.mem.Allocator, input: []const u8, project_name: []const u8) ![]u8 {
+    const placeholder = "{{PROJECT_NAME}}";
+
+    // Count occurrences to calculate output size.
+    var count: usize = 0;
+    var pos: usize = 0;
+    while (std.mem.indexOfPos(u8, input, pos, placeholder)) |idx| {
+        count += 1;
+        pos = idx + placeholder.len;
+    }
+
+    if (count == 0) {
+        return try allocator.dupe(u8, input);
+    }
+
+    const out_len = input.len - (count * placeholder.len) + (count * project_name.len);
+    const output = try allocator.alloc(u8, out_len);
+
+    var src: usize = 0;
+    var dst: usize = 0;
+    while (std.mem.indexOfPos(u8, input, src, placeholder)) |idx| {
+        const chunk_len = idx - src;
+        @memcpy(output[dst..][0..chunk_len], input[src..][0..chunk_len]);
+        dst += chunk_len;
+        @memcpy(output[dst..][0..project_name.len], project_name);
+        dst += project_name.len;
+        src = idx + placeholder.len;
+    }
+    // Copy the remaining tail.
+    const tail_len = input.len - src;
+    @memcpy(output[dst..][0..tail_len], input[src..][0..tail_len]);
+
+    return output;
 }
 
 fn generateBuildFiles(allocator: std.mem.Allocator, project_name: []const u8, target_path: []const u8) !void {
@@ -543,4 +679,25 @@ test "deriveProjectName simple name" {
     const name = try deriveProjectName(allocator, "/home/user/myapp");
     defer allocator.free(name);
     try std.testing.expectEqualStrings("myapp", name);
+}
+
+test "substitutePlaceholder no placeholders" {
+    const allocator = std.testing.allocator;
+    const result = try substitutePlaceholder(allocator, "hello world", "myapp");
+    defer allocator.free(result);
+    try std.testing.expectEqualStrings("hello world", result);
+}
+
+test "substitutePlaceholder single replacement" {
+    const allocator = std.testing.allocator;
+    const result = try substitutePlaceholder(allocator, "name={{PROJECT_NAME}}", "myapp");
+    defer allocator.free(result);
+    try std.testing.expectEqualStrings("name=myapp", result);
+}
+
+test "substitutePlaceholder multiple replacements" {
+    const allocator = std.testing.allocator;
+    const result = try substitutePlaceholder(allocator, "{{PROJECT_NAME}}.js and {{PROJECT_NAME}}.wasm", "cool_app");
+    defer allocator.free(result);
+    try std.testing.expectEqualStrings("cool_app.js and cool_app.wasm", result);
 }
