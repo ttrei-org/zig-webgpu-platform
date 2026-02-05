@@ -67,11 +67,11 @@ const MouseState = platform.MouseState;
 
 pub const MyApp = struct {
     running: bool = true,
-    
+
     pub fn init() MyApp {
         return .{};
     }
-    
+
     pub fn appInterface(self: *MyApp) AppInterface {
         return .{
             .context = @ptrCast(self),
@@ -84,13 +84,13 @@ pub const MyApp = struct {
             .onScreenshotCompleteFn = null,
         };
     }
-    
+
     fn updateImpl(iface: *AppInterface, delta_time: f32, mouse: MouseState) void {
         _ = delta_time;
         _ = mouse;
         _ = iface;
     }
-    
+
     fn renderImpl(iface: *AppInterface, canvas: *Canvas) void {
         _ = iface;
         // Draw a blue background
@@ -98,17 +98,17 @@ pub const MyApp = struct {
         // Draw a red circle in the center
         canvas.fillCircle(200, 150, 30, Color.red, 32);
     }
-    
+
     fn isRunningImpl(iface: *const AppInterface) bool {
         const self: *const MyApp = @ptrCast(@alignCast(iface.context));
         return self.running;
     }
-    
+
     fn requestQuitImpl(iface: *AppInterface) void {
         const self: *MyApp = @ptrCast(@alignCast(iface.context));
         self.running = false;
     }
-    
+
     fn deinitImpl(iface: *AppInterface) void {
         _ = iface;
     }
@@ -118,7 +118,7 @@ pub fn main() void {
     var app = MyApp.init();
     var iface = app.appInterface();
     defer iface.deinit();
-    
+
     platform.run(&iface, .{
         .viewport = .{ .logical_width = 400.0, .logical_height = 300.0 },
         .width = 800,
@@ -162,7 +162,7 @@ The main drawing interface. Applications receive a `*Canvas` in their `render()`
 pub const Canvas = struct {
     renderer: *Renderer,    // Internal - do not access directly
     viewport: Viewport,     // Read-only: logical drawing area
-    
+
     pub fn init(renderer: *Renderer, viewport: Viewport) Canvas;
 };
 ```
@@ -438,7 +438,7 @@ pub const MouseState = struct {
     left_pressed: bool,
     right_pressed: bool,
     middle_pressed: bool,
-    
+
     pub fn isPressed(self: MouseState, button: MouseButton) bool;
     pub fn buttonJustPressed(current: MouseState, prev: MouseState, button: MouseButton) bool;
     pub fn buttonJustReleased(current: MouseState, prev: MouseState, button: MouseButton) bool;
@@ -495,7 +495,7 @@ pub const AppInterface = struct {
     pub fn isRunning(self: *const Self) bool;
     pub fn requestQuit(self: *Self) void;
     pub fn deinit(self: *Self) void;
-    
+
     // Optional methods (for screenshot workflow)
     pub fn shouldTakeScreenshot(self: *const Self) ?[]const u8;
     pub fn onScreenshotComplete(self: *Self) void;
@@ -526,11 +526,11 @@ pub const App = struct {
     running: bool = true,
     ball_x: f32 = 200.0,
     ball_y: f32 = 150.0,
-    
+
     pub fn init() App {
         return .{};
     }
-    
+
     pub fn appInterface(self: *App) AppInterface {
         return .{
             .context = @ptrCast(self),
@@ -543,36 +543,36 @@ pub const App = struct {
             .onScreenshotCompleteFn = null,
         };
     }
-    
+
     fn updateImpl(iface: *AppInterface, delta_time: f32, mouse: MouseState) void {
         const self: *App = @ptrCast(@alignCast(iface.context));
         // Move ball toward mouse
         self.ball_x += (mouse.x - self.ball_x) * delta_time * 5.0;
         self.ball_y += (mouse.y - self.ball_y) * delta_time * 5.0;
     }
-    
+
     fn renderImpl(iface: *AppInterface, canvas: *Canvas) void {
         _ = iface;
         // Sky background
         canvas.fillRect(0, 0, canvas.viewport.logical_width, canvas.viewport.logical_height, Color.fromHex(0x87CEEB));
-        
+
         // Ball following mouse
         canvas.fillCircle(200, 150, 20.0, Color.red, 32);
-        
+
         // Border
         canvas.strokeRect(10, 10, canvas.viewport.logical_width - 20, canvas.viewport.logical_height - 20, 2.0, Color.black);
     }
-    
+
     fn isRunningImpl(iface: *const AppInterface) bool {
         const self: *const App = @ptrCast(@alignCast(iface.context));
         return self.running;
     }
-    
+
     fn requestQuitImpl(iface: *AppInterface) void {
         const self: *App = @ptrCast(@alignCast(iface.context));
         self.running = false;
     }
-    
+
     fn deinitImpl(iface: *AppInterface) void {
         _ = iface;
     }
@@ -582,7 +582,7 @@ pub fn main() void {
     var app = App.init();
     var iface = app.appInterface();
     defer iface.deinit();
-    
+
     platform.run(&iface, .{
         .viewport = .{ .logical_width = 400.0, .logical_height = 300.0 },
         .width = 800,
@@ -611,19 +611,19 @@ Configuration for the platform runner.
 pub const RunOptions = struct {
     /// Logical viewport dimensions for drawing (default: 400x300)
     viewport: Viewport = .{ .logical_width = 400.0, .logical_height = 300.0 },
-    
+
     /// If set, take a screenshot to this filename and exit
     screenshot_filename: ?[]const u8 = null,
-    
+
     /// Run in headless mode (no window display)
     headless: bool = false,
-    
+
     /// Window/framebuffer width in pixels (default: 800)
     width: u32 = 800,
-    
+
     /// Window/framebuffer height in pixels (default: 600)
     height: u32 = 600,
-    
+
     /// Window title (desktop only)
     window_title: [:0]const u8 = "Zig WebGPU Application",
 };
