@@ -21,5 +21,5 @@ Compare screenshots of both native and web (see AGENTS.md on how to use playwrig
 
 99999. Important! ALWAYS keep DESIGN.md up to date.
 
-999999. IMPORTANT! Maintain API.md that describes the public API of this platform. It must contain all required details on how to write a graphical zig program against the platform.
+999999. IMPORTANT! Maintain API.md as a comprehensive reference for application developers. It must document all public functions, structs, constants, and enums needed to write a graphical Zig program against the platform. Update API.md whenever a public API is added, modified, or removed, and verify it when closing any bead that touches public APIs.
 
