@@ -366,4 +366,4 @@ Resolution independence. Applications draw at a fixed logical size, and the plat
 | `build.zig` | ~220 | Build configuration + module export | Build |
 | `create-app/build.zig` | ~40 | Build config for create-app CLI tool (exe + tests) | Tooling |
 | `create-app/build.zig.zon` | ~15 | Package manifest for create-app (no deps) | Tooling |
-| `create-app/src/main.zig` | ~210 | Scaffolding tool: CLI parsing, directory validation, name derivation | Tooling |
+| `create-app/src/main.zig` | ~550 | Scaffolding tool: CLI parsing, directory validation, code generation | Tooling |
