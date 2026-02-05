@@ -344,26 +344,6 @@ Resolution independence. Applications draw at a fixed logical size, and the plat
 
 ---
 
-## 7. Evolution Roadmap
-
-### Phase 1: Solidify the Canvas API (current focus)
-
-- [x] Extract `Color` to its own module (remove app dependency on `renderer.zig`)
-- [x] Define an `App` interface/trait so the platform doesn't depend on a concrete App struct
-- [x] Add `strokeRect`, `strokeCircle`, `drawPolyline`
-- [x] Add alpha blending support in the render pipeline
-- [x] Ensure mouse coordinates are consistently in logical viewport space on all backends
-- [ ] Write comprehensive Canvas API documentation
-
-### Phase 2: Robustness
-
-- [ ] Error handling review — all GPU operations should return errors, not silently fail
-- [ ] Graceful device loss recovery (WebGPU `device.lost` handling)
-- [ ] Vertex buffer overflow protection (currently hardcoded at 10,000 vertices)
-- [ ] Add integration tests comparing rendered screenshots across backends
-
----
-
 ## 8. File Map
 
 | File | Lines | Role | Layer |
