@@ -4,22 +4,150 @@ Comprehensive reference for application developers building graphical Zig progra
 
 ---
 
+## Using as a Library
+
+zig-webgpu-platform can be used as a dependency in your own Zig projects.
+
+### Adding the Dependency
+
+Add to your `build.zig.zon`:
+
+```zig
+.dependencies = .{
+    .zig_webgpu_platform = .{
+        .url = "https://github.com/user/zig-webgpu-platform/archive/main.tar.gz",
+        .hash = "...", // Use `zig fetch` to get the hash
+    },
+}
+```
+
+### Configuring build.zig
+
+```zig
+const platform_dep = b.dependency("zig_webgpu_platform", .{
+    .target = target,
+    .optimize = optimize,
+});
+exe.root_module.addImport("platform", platform_dep.module("zig-webgpu-platform"));
+```
+
+### Library Import Pattern
+
+```zig
+const platform = @import("platform");
+
+// Drawing types
+const Canvas = platform.Canvas;
+const Viewport = platform.Viewport;
+const Color = platform.Color;
+
+// Application interface
+const AppInterface = platform.AppInterface;
+
+// Input types
+const MouseState = platform.MouseState;
+const MouseButton = platform.MouseButton;
+const Key = platform.Key;
+
+// Platform runner
+const run = platform.run;
+const RunOptions = platform.RunOptions;
+```
+
+### Minimal Example
+
+```zig
+const std = @import("std");
+const platform = @import("platform");
+
+const Canvas = platform.Canvas;
+const Color = platform.Color;
+const AppInterface = platform.AppInterface;
+const MouseState = platform.MouseState;
+
+pub const MyApp = struct {
+    running: bool = true,
+    
+    pub fn init() MyApp {
+        return .{};
+    }
+    
+    pub fn appInterface(self: *MyApp) AppInterface {
+        return .{
+            .context = @ptrCast(self),
+            .updateFn = &updateImpl,
+            .renderFn = &renderImpl,
+            .isRunningFn = &isRunningImpl,
+            .requestQuitFn = &requestQuitImpl,
+            .deinitFn = &deinitImpl,
+            .shouldTakeScreenshotFn = null,
+            .onScreenshotCompleteFn = null,
+        };
+    }
+    
+    fn updateImpl(iface: *AppInterface, delta_time: f32, mouse: MouseState) void {
+        _ = delta_time;
+        _ = mouse;
+        _ = iface;
+    }
+    
+    fn renderImpl(iface: *AppInterface, canvas: *Canvas) void {
+        _ = iface;
+        // Draw a blue background
+        canvas.fillRect(0, 0, canvas.viewport.logical_width, canvas.viewport.logical_height, Color.fromHex(0x87CEEB));
+        // Draw a red circle in the center
+        canvas.fillCircle(200, 150, 30, Color.red, 32);
+    }
+    
+    fn isRunningImpl(iface: *const AppInterface) bool {
+        const self: *const MyApp = @ptrCast(@alignCast(iface.context));
+        return self.running;
+    }
+    
+    fn requestQuitImpl(iface: *AppInterface) void {
+        const self: *MyApp = @ptrCast(@alignCast(iface.context));
+        self.running = false;
+    }
+    
+    fn deinitImpl(iface: *AppInterface) void {
+        _ = iface;
+    }
+};
+
+pub fn main() void {
+    var app = MyApp.init();
+    var iface = app.appInterface();
+    defer iface.deinit();
+    
+    platform.run(&iface, .{
+        .viewport = .{ .logical_width = 400.0, .logical_height = 300.0 },
+        .width = 800,
+        .height = 600,
+        .window_title = "My App",
+    });
+}
+```
+
+---
+
 ## Overview
 
-Applications interact with the platform through three main modules:
+For internal development or direct source imports, applications interact with the platform through these modules:
 
 | Module | Purpose |
 |--------|---------|
+| `lib.zig` | **Public API surface** - re-exports all public types |
 | `canvas.zig` | 2D shape drawing API (Canvas, Viewport) |
 | `color.zig` | Color type with factory methods and constants |
 | `app_interface.zig` | Application lifecycle interface |
+| `platform.zig` | Input types (MouseState, MouseButton, Key) |
 
-Import pattern:
+Direct import pattern (internal use):
 ```zig
-const canvas = @import("canvas.zig");
-const Canvas = canvas.Canvas;
-const Color = canvas.Color;
-const Viewport = canvas.Viewport;
+const lib = @import("lib.zig");
+const Canvas = lib.Canvas;
+const Color = lib.Color;
+const Viewport = lib.Viewport;
 ```
 
 ---
@@ -429,6 +557,40 @@ pub const App = struct {
 - **Batch capacity:** 10,000 vertices (3,333 triangles) per frame
 - **Vertex format:** 24 bytes per vertex (position + RGBA color)
 - **Immediate mode:** No scene graph; redraw everything each frame
+
+---
+
+## RunOptions
+
+Configuration for the platform runner.
+
+```zig
+pub const RunOptions = struct {
+    /// Logical viewport dimensions for drawing (default: 400x300)
+    viewport: Viewport = .{ .logical_width = 400.0, .logical_height = 300.0 },
+    
+    /// If set, take a screenshot to this filename and exit
+    screenshot_filename: ?[]const u8 = null,
+    
+    /// Run in headless mode (no window display)
+    headless: bool = false,
+    
+    /// Window/framebuffer width in pixels (default: 800)
+    width: u32 = 800,
+    
+    /// Window/framebuffer height in pixels (default: 600)
+    height: u32 = 600,
+    
+    /// Window title (desktop only)
+    window_title: [:0]const u8 = "Zig WebGPU Application",
+};
+```
+
+**Command-line overrides:** The runner accepts these CLI arguments:
+- `--screenshot=<path>` - Take screenshot and exit
+- `--headless` - Run without a window
+- `--width=N` - Set window width
+- `--height=N` - Set window height
 
 ---
 

@@ -779,4 +779,5 @@ fn wasmStart() callconv(.c) void {
 test {
     _ = @import("canvas.zig");
     _ = @import("app_interface.zig");
+    _ = @import("lib.zig");
 }

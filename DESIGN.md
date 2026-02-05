@@ -348,17 +348,19 @@ Resolution independence. Applications draw at a fixed logical size, and the plat
 
 | File | Lines | Role | Layer |
 |---|---|---|---|
-| `src/canvas.zig` | 218 | Shape drawing API | **Public API** |
-| `src/renderer.zig` | 2426 | WebGPU rendering | Internal |
-| `src/render_target.zig` | 788 | Render target abstraction | Internal |
-| `src/platform.zig` | 311 | Platform interface | Internal |
-| `src/platform/desktop.zig` | 343 | GLFW backend | Internal |
-| `src/platform/web.zig` | 1571 | Browser/WASM backend | Internal |
-| `src/platform/headless.zig` | 222 | Headless backend | Internal |
-| `src/main.zig` | 711 | Frame orchestration + entry | Internal |
-| `src/app.zig` | 743 | Demo application | Example/Demo |
-| `src/app_interface.zig` | 120 | Application interface (vtable) | Internal |
-| `src/shaders/triangle.wgsl` | 69 | GPU shader | Internal |
-| `web/index.html` | 198 | Web host page | Web infra |
-| `web/wasm_bindings.js` | 1527 | JS WebGPU bridge | Web infra |
-| `build.zig` | 203 | Build configuration | Build |
+| `src/lib.zig` | ~400 | **Library entry point** - exports public API + run() | **Public API** |
+| `src/canvas.zig` | ~450 | Shape drawing API | **Public API** |
+| `src/color.zig` | ~110 | Color type | **Public API** |
+| `src/app_interface.zig` | ~150 | Application interface (vtable) | **Public API** |
+| `src/renderer.zig` | ~2500 | WebGPU rendering | Internal |
+| `src/render_target.zig` | ~800 | Render target abstraction | Internal |
+| `src/platform.zig` | ~310 | Platform interface + input types | Internal |
+| `src/platform/desktop.zig` | ~350 | GLFW backend | Internal |
+| `src/platform/web.zig` | ~1600 | Browser/WASM backend | Internal |
+| `src/platform/headless.zig` | ~220 | Headless backend | Internal |
+| `src/main.zig` | ~780 | Frame orchestration + entry | Internal |
+| `src/app.zig` | ~870 | Demo application | Example/Demo |
+| `src/shaders/triangle.wgsl` | ~70 | GPU shader | Internal |
+| `web/index.html` | ~200 | Web host page | Web infra |
+| `web/wasm_bindings.js` | ~1500 | JS WebGPU bridge | Web infra |
+| `build.zig` | ~220 | Build configuration + module export | Build |

@@ -148,6 +148,21 @@ pub fn build(b: *std.Build) void {
 
     b.installArtifact(exe);
 
+    // Export the library module for consumers who want to use this as a dependency.
+    // The module exports the public API surface (Canvas, Color, Viewport, etc.)
+    // through src/lib.zig, keeping internal modules hidden.
+    const lib_module = b.addModule("zig-webgpu-platform", .{
+        .root_source_file = b.path("src/lib.zig"),
+        .target = target,
+        .optimize = optimize,
+    });
+    // Library module needs the same dependencies as the executable
+    lib_module.addImport("zgpu", zgpu_module);
+    lib_module.addImport("zigimg", zigimg_dep.module("zigimg"));
+    if (zglfw_dep) |dep| {
+        lib_module.addImport("zglfw", dep.module("root"));
+    }
+
     // For web builds, also generate JavaScript glue code
     if (is_wasm) {
         // Create JavaScript loader file that instantiates the WASM module
