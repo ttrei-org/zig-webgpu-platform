@@ -8,17 +8,11 @@
 
 const std = @import("std");
 
-const platform_mod = @import("platform.zig");
-const MouseState = platform_mod.MouseState;
-
-const renderer_mod = @import("renderer.zig");
-const Renderer = renderer_mod.Renderer;
-
-const canvas_mod = @import("canvas.zig");
-const Canvas = canvas_mod.Canvas;
-const Color = canvas_mod.Color;
-
-const AppInterface = @import("app_interface.zig").AppInterface;
+const lib = @import("lib.zig");
+const Canvas = lib.Canvas;
+const Color = lib.Color;
+const MouseState = lib.MouseState;
+const AppInterface = lib.AppInterface;
 
 const log = std.log.scoped(.app);
 
@@ -61,11 +55,6 @@ pub const App = struct {
     /// A full rotation takes ~4 seconds (tau/4 radians per second).
     rotation_angle: f32,
 
-    /// Reference to the renderer for screenshot capability.
-    /// Set via setRenderer() after renderer initialization.
-    /// Optional because App may be created before Renderer in some initialization orders.
-    renderer: ?*Renderer,
-
     /// Path for screenshot output. If set, a screenshot will be taken after the first frame.
     /// Set via setScreenshotPath() or during initialization.
     screenshot_path: ?[]const u8,
@@ -89,7 +78,6 @@ pub const App = struct {
 
     /// Initialize the application with the given allocator.
     /// The allocator is stored for any dynamic allocations the app may need.
-    /// Renderer reference is initially null; call setRenderer() to enable screenshot capability.
     pub fn init(allocator: std.mem.Allocator) Self {
         return initWithOptions(allocator, .{});
     }
@@ -116,19 +104,10 @@ pub const App = struct {
             .prev_mouse_state = initial_mouse_state,
             .triangle_position = .{ 200.0, 150.0 }, // Center of 400x300 window
             .rotation_angle = 0.0,
-            .renderer = null,
             .screenshot_path = options.screenshot_path,
             .screenshot_pending = options.screenshot_path != null,
             .quit_after_screenshot = options.quit_after_screenshot,
         };
-    }
-
-    /// Set the renderer reference for screenshot capability.
-    /// Must be called after renderer initialization to enable takeScreenshot().
-    /// This decouples App initialization from Renderer initialization order.
-    pub fn setRenderer(self: *Self, renderer: *Renderer) void {
-        self.renderer = renderer;
-        log.debug("renderer reference set for screenshot capability", .{});
     }
 
     /// Schedule a screenshot to be taken after the next frame.
@@ -586,41 +565,6 @@ pub const App = struct {
     pub fn getFrameCount(self: *const Self) u64 {
         return self.frame_count;
     }
-
-    /// Screenshot error type for App-level screenshot operations.
-    pub const ScreenshotError = error{
-        /// Renderer not set. Call setRenderer() before takeScreenshot().
-        RendererNotSet,
-        /// Screenshot capture failed (underlying renderer error).
-        CaptureFailed,
-    };
-
-    /// Take a screenshot of the current frame and save to a PNG file.
-    /// Delegates to the renderer's screenshot method.
-    ///
-    /// Prerequisites:
-    /// - setRenderer() must be called first to provide renderer reference
-    /// - Should be called after render() to capture the current frame's content
-    ///
-    /// Parameters:
-    /// - path: File path where the PNG screenshot will be saved
-    ///
-    /// Returns:
-    /// - ScreenshotError.RendererNotSet if setRenderer() was not called
-    /// - ScreenshotError.CaptureFailed if the renderer fails to capture
-    pub fn takeScreenshot(self: *Self, path: []const u8) ScreenshotError!void {
-        const renderer = self.renderer orelse {
-            log.err("cannot take screenshot: renderer not set. Call setRenderer() first.", .{});
-            return ScreenshotError.RendererNotSet;
-        };
-
-        renderer.screenshot(path) catch |err| {
-            log.err("screenshot capture failed: {}", .{err});
-            return ScreenshotError.CaptureFailed;
-        };
-
-        log.info("screenshot saved to: {s} (frame {})", .{ path, self.frame_count });
-    }
 };
 
 test "App init and deinit" {
@@ -757,25 +701,6 @@ test "Rotation angle updates with delta time" {
     app.update(1.0, mouse_state);
     // Should be close to tau, which then wraps to ~0
     try std.testing.expect(app.rotation_angle < std.math.tau);
-}
-
-test "takeScreenshot returns error when renderer not set" {
-    var app = App.init(std.testing.allocator);
-    defer app.deinit();
-
-    // Renderer is null by default, so takeScreenshot should fail
-    try std.testing.expectEqual(@as(?*Renderer, null), app.renderer);
-
-    const result = app.takeScreenshot("/tmp/test.png");
-    try std.testing.expectError(App.ScreenshotError.RendererNotSet, result);
-}
-
-test "App init has null renderer by default" {
-    var app = App.init(std.testing.allocator);
-    defer app.deinit();
-
-    // Verify renderer is null on init
-    try std.testing.expectEqual(@as(?*Renderer, null), app.renderer);
 }
 
 test "App initWithOptions configures screenshot" {

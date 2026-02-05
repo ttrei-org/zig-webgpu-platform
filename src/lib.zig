@@ -226,7 +226,7 @@ fn runWindowed(app: *AppInterface, config: InternalConfig) void {
     log.info("starting windowed mode", .{});
 
     // Build a Config struct for DesktopPlatform
-    const platform_config = .{
+    const platform_config: platform_mod.Config = .{
         .screenshot_filename = config.screenshot_filename,
         .headless = false,
         .width = config.width,
@@ -266,6 +266,7 @@ fn runWindowed(app: *AppInterface, config: InternalConfig) void {
     log.info("entering main loop", .{});
 
     var last_time: f64 = zglfw.getTime();
+    var first_frame_rendered = false;
 
     // Main loop
     while (!plat.shouldQuit() and app.isRunning()) {
@@ -321,9 +322,21 @@ fn runWindowed(app: *AppInterface, config: InternalConfig) void {
             continue;
         }
 
-        runFrame(app, &renderer, &render_target, config.viewport, null);
+        runFrame(app, &renderer, render_target, config.viewport, null);
 
-        // Check if App wants to take a screenshot after this frame
+        // Take screenshot if configured (first frame only)
+        if (!first_frame_rendered) {
+            first_frame_rendered = true;
+            if (config.screenshot_filename) |filename| {
+                log.info("taking screenshot to {s}", .{filename});
+                renderer.screenshot(filename) catch |err| {
+                    log.err("failed to take screenshot: {}", .{err});
+                };
+                app.requestQuit();
+            }
+        }
+
+        // Also check if App wants to take a screenshot
         if (app.shouldTakeScreenshot()) |filename| {
             renderer.screenshot(filename) catch |err| {
                 log.err("failed to take screenshot: {}", .{err});
@@ -340,7 +353,7 @@ fn runHeadless(app: *AppInterface, config: InternalConfig) void {
     log.info("starting headless mode", .{});
 
     // Build a Config struct for HeadlessPlatform
-    const platform_config = .{
+    const platform_config: platform_mod.Config = .{
         .screenshot_filename = config.screenshot_filename,
         .headless = true,
         .width = config.width,

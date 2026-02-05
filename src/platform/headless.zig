@@ -7,14 +7,12 @@
 const std = @import("std");
 const builtin = @import("builtin");
 
-const main = @import("../main.zig");
-const Config = main.Config;
-
 const platform_mod = @import("../platform.zig");
 const Platform = platform_mod.Platform;
 const MouseState = platform_mod.MouseState;
 const Key = platform_mod.Key;
 const Size = platform_mod.Size;
+const Config = platform_mod.Config;
 
 /// zglfw is only available on native desktop builds
 const zglfw = if (platform_mod.is_native) @import("zglfw") else struct {

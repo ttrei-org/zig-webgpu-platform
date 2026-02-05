@@ -111,6 +111,19 @@ pub const Size = struct {
     height: u32,
 };
 
+/// Platform configuration options.
+/// Used to initialize platform backends with runtime settings.
+pub const Config = struct {
+    /// If set, take a screenshot to this filename and exit.
+    screenshot_filename: ?[]const u8 = null,
+    /// If true, run in headless mode (no window display).
+    headless: bool = false,
+    /// Window/framebuffer width in pixels.
+    width: u32 = 800,
+    /// Window/framebuffer height in pixels.
+    height: u32 = 600,
+};
+
 /// Platform-agnostic interface for window management and input handling.
 ///
 /// This struct provides a unified API across different backends:
