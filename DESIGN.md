@@ -364,6 +364,6 @@ Resolution independence. Applications draw at a fixed logical size, and the plat
 | `web/index.html` | ~200 | Web host page | Web infra |
 | `web/wasm_bindings.js` | ~1500 | JS WebGPU bridge | Web infra |
 | `build.zig` | ~220 | Build configuration + module export | Build |
-| `create-app/build.zig` | ~30 | Build config for create-app CLI tool | Tooling |
+| `create-app/build.zig` | ~40 | Build config for create-app CLI tool (exe + tests) | Tooling |
 | `create-app/build.zig.zon` | ~15 | Package manifest for create-app (no deps) | Tooling |
-| `create-app/src/main.zig` | ~15 | Scaffolding tool entry point (stub) | Tooling |
+| `create-app/src/main.zig` | ~210 | Scaffolding tool: CLI parsing, directory validation, name derivation | Tooling |
