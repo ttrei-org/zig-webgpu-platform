@@ -35,7 +35,7 @@ fn run(allocator: std.mem.Allocator) !void {
 
     try fetchTemplates(allocator, project_name, target_path);
     try generateBuildFiles(allocator, project_name, target_path);
-    initGitRepo(project_name, target_path);
+    initGitRepo(allocator, project_name, target_path);
 }
 
 // ---------------------------------------------------------------------------
@@ -622,8 +622,114 @@ fn writeMainZig(allocator: std.mem.Allocator, dir: std.fs.Dir, project_name: []c
     try file.writeAll(buf.items);
 }
 
-fn initGitRepo(_: []const u8, _: []const u8) void {
-    printInfo("TODO: initialize git repository", .{});
+/// Initialize a git repository, add playwright-cli submodule, run zig fetch,
+/// and create an initial commit. Git is optional (a warning is printed if
+/// missing), but zig is required for the fetch step.
+fn initGitRepo(allocator: std.mem.Allocator, project_name: []const u8, target_path: []const u8) void {
+    // Step 1: git init
+    printInfo("Initializing git repository...", .{});
+    const git_available = runCommand(allocator, target_path, &.{ "git", "init" });
+
+    if (!git_available) {
+        printInfo("Warning: git not found or 'git init' failed. Skipping git setup.", .{});
+    } else {
+        // Step 2: git submodule add playwright-cli
+        printInfo("Adding playwright-cli submodule...", .{});
+        const submodule_ok = runCommand(allocator, target_path, &.{
+            "git",                                                  "submodule",             "add",
+            "https://github.com/nicholasgasior/playwright-cli.git", "skills/playwright-cli",
+        });
+        if (!submodule_ok) {
+            printInfo("Warning: failed to add playwright-cli submodule. Continuing...", .{});
+        }
+    }
+
+    // Step 3: zig fetch --save (required)
+    printInfo("Fetching zig-webgpu-platform dependency (this may take a moment)...", .{});
+    const zig_ok = runCommand(allocator, target_path, &.{
+        "zig",                                                                    "fetch", "--save",
+        "https://github.com/ttrei-org/zig-webgpu-platform/archive/master.tar.gz",
+    });
+    if (!zig_ok) {
+        printError("'zig fetch --save' failed. Ensure zig is installed and network is available.", .{});
+        std.process.exit(1);
+    }
+
+    // Step 4: git add -A && git commit
+    if (git_available) {
+        printInfo("Creating initial commit...", .{});
+        const add_ok = runCommand(allocator, target_path, &.{ "git", "add", "-A" });
+        if (add_ok) {
+            _ = runCommand(allocator, target_path, &.{
+                "git", "commit", "-m", "Initial project scaffold",
+            });
+        }
+    }
+
+    // Step 5: Success message
+    printInfo(
+        \\
+        \\Project "{s}" created successfully in {s}
+        \\
+        \\To build and run:
+        \\  zig build run          # Native desktop
+        \\  zig build -Dtarget=wasm32-emscripten  # Web/WASM build
+        \\  python3 serve.py       # Serve web build at http://localhost:8000
+        \\
+        \\To take screenshots:
+        \\  xvfb-run zig build run -- --screenshot=/tmp/screenshot.png  # Native
+        \\  ./scripts/web_screenshot.sh /tmp/web_screenshot.png          # Web
+    , .{ project_name, target_path });
+}
+
+/// Run a command in the given directory. Returns true on success (exit code 0),
+/// false if the command could not be spawned or exited with non-zero status.
+fn runCommand(allocator: std.mem.Allocator, cwd: []const u8, argv: []const []const u8) bool {
+    var child = std.process.Child.init(argv, allocator);
+    child.cwd = cwd;
+    child.stderr_behavior = .Pipe;
+    child.stdout_behavior = .Pipe;
+
+    child.spawn() catch |err| {
+        printInfo("  Could not run '{s}': {s}", .{ argv[0], @errorName(err) });
+        return false;
+    };
+
+    var stderr_buf: std.ArrayList(u8) = .empty;
+    defer stderr_buf.deinit(allocator);
+    var stdout_buf: std.ArrayList(u8) = .empty;
+    defer stdout_buf.deinit(allocator);
+
+    child.collectOutput(allocator, &stdout_buf, &stderr_buf, 256 * 1024) catch |err| {
+        printInfo("  Error collecting output from '{s}': {s}", .{ argv[0], @errorName(err) });
+        _ = child.wait() catch {};
+        return false;
+    };
+
+    const term = child.wait() catch |err| {
+        printInfo("  Error waiting for '{s}': {s}", .{ argv[0], @errorName(err) });
+        return false;
+    };
+
+    const exit_code: u8 = switch (term) {
+        .Exited => |code| code,
+        else => {
+            printInfo("  '{s}' terminated abnormally", .{argv[0]});
+            return false;
+        },
+    };
+
+    if (exit_code != 0) {
+        const stderr_output = stderr_buf.items;
+        if (stderr_output.len > 0) {
+            printInfo("  '{s}' failed (exit {d}): {s}", .{ argv[0], exit_code, stderr_output });
+        } else {
+            printInfo("  '{s}' failed with exit code {d}", .{ argv[0], exit_code });
+        }
+        return false;
+    }
+
+    return true;
 }
 
 // ---------------------------------------------------------------------------
