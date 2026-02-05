@@ -511,42 +511,85 @@ pub const AppInterface = struct {
 
 ## Example Application
 
+A more complete example showing mouse-following behavior:
+
 ```zig
 const std = @import("std");
-const canvas = @import("canvas.zig");
-const Canvas = canvas.Canvas;
-const Color = canvas.Color;
+const platform = @import("platform");
+
+const Canvas = platform.Canvas;
+const Color = platform.Color;
+const AppInterface = platform.AppInterface;
+const MouseState = platform.MouseState;
 
 pub const App = struct {
     running: bool = true,
     ball_x: f32 = 200.0,
     ball_y: f32 = 150.0,
     
-    pub fn update(self: *App, delta_time: f32, mouse: MouseState) void {
+    pub fn init() App {
+        return .{};
+    }
+    
+    pub fn appInterface(self: *App) AppInterface {
+        return .{
+            .context = @ptrCast(self),
+            .updateFn = &updateImpl,
+            .renderFn = &renderImpl,
+            .isRunningFn = &isRunningImpl,
+            .requestQuitFn = &requestQuitImpl,
+            .deinitFn = &deinitImpl,
+            .shouldTakeScreenshotFn = null,
+            .onScreenshotCompleteFn = null,
+        };
+    }
+    
+    fn updateImpl(iface: *AppInterface, delta_time: f32, mouse: MouseState) void {
+        const self: *App = @ptrCast(@alignCast(iface.context));
         // Move ball toward mouse
         self.ball_x += (mouse.x - self.ball_x) * delta_time * 5.0;
         self.ball_y += (mouse.y - self.ball_y) * delta_time * 5.0;
     }
     
-    pub fn render(self: *App, c: *Canvas) void {
+    fn renderImpl(iface: *AppInterface, canvas: *Canvas) void {
+        _ = iface;
         // Sky background
-        c.fillRect(0, 0, c.viewport.logical_width, c.viewport.logical_height, Color.fromHex(0x87CEEB));
+        canvas.fillRect(0, 0, canvas.viewport.logical_width, canvas.viewport.logical_height, Color.fromHex(0x87CEEB));
         
         // Ball following mouse
-        c.fillCircle(self.ball_x, self.ball_y, 20.0, Color.red, 32);
+        canvas.fillCircle(200, 150, 20.0, Color.red, 32);
         
         // Border
-        c.strokeRect(10, 10, c.viewport.logical_width - 20, c.viewport.logical_height - 20, 2.0, Color.black);
+        canvas.strokeRect(10, 10, canvas.viewport.logical_width - 20, canvas.viewport.logical_height - 20, 2.0, Color.black);
     }
     
-    pub fn isRunning(self: *const App) bool {
+    fn isRunningImpl(iface: *const AppInterface) bool {
+        const self: *const App = @ptrCast(@alignCast(iface.context));
         return self.running;
     }
     
-    pub fn requestQuit(self: *App) void {
+    fn requestQuitImpl(iface: *AppInterface) void {
+        const self: *App = @ptrCast(@alignCast(iface.context));
         self.running = false;
     }
+    
+    fn deinitImpl(iface: *AppInterface) void {
+        _ = iface;
+    }
 };
+
+pub fn main() void {
+    var app = App.init();
+    var iface = app.appInterface();
+    defer iface.deinit();
+    
+    platform.run(&iface, .{
+        .viewport = .{ .logical_width = 400.0, .logical_height = 300.0 },
+        .width = 800,
+        .height = 600,
+        .window_title = "Ball Demo",
+    });
+}
 ```
 
 ---
