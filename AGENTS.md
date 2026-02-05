@@ -75,9 +75,9 @@ try map.put("key", 42);
 **stdout/stderr Writer:**
 ```zig
 var buf: [4096]u8 = undefined;
-const writer = std.fs.File.stdout().writer(&buf);
-defer writer.flush() catch {};
-try writer.print("hello {s}\n", .{"world"});
+var writer = std.fs.File.stdout().writer(&buf);
+defer writer.interface.flush() catch {};
+try writer.interface.print("hello {s}\n", .{"world"});
 ```
 
 **build.zig executable/test:**
