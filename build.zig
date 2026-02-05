@@ -199,4 +199,11 @@ pub fn build(b: *std.Build) void {
 
     const fmt_check = b.addFmt(.{ .paths = &.{ "src", "build.zig", "build.zig.zon" } });
     test_step.dependOn(&fmt_check.step);
+
+    // Backend comparison step (integration test)
+    // Runs compare_backends.sh which captures screenshots from desktop and web,
+    // then compares them with ImageMagick to detect rendering regressions.
+    const compare_step = b.step("compare-backends", "Compare screenshots from desktop and web backends");
+    const compare_cmd = b.addSystemCommand(&.{"./scripts/compare_backends.sh"});
+    compare_step.dependOn(&compare_cmd.step);
 }
