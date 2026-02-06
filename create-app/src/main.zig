@@ -21,52 +21,102 @@ pub fn main() !void {
     };
 }
 
+/// Parsed CLI options.
+const CliOptions = struct {
+    target_path: []const u8,
+    templates_dir: ?[]const u8 = null,
+    platform_path: ?[]const u8 = null,
+
+    fn deinit(self: *const CliOptions, allocator: std.mem.Allocator) void {
+        allocator.free(self.target_path);
+        if (self.templates_dir) |p| allocator.free(p);
+        if (self.platform_path) |p| allocator.free(p);
+    }
+};
+
 /// Core logic, separated from main() for testability.
 fn run(allocator: std.mem.Allocator) !void {
-    const target_path = try resolveTargetPath(allocator);
-    defer allocator.free(target_path);
+    const opts = try parseCliOptions(allocator);
+    defer opts.deinit(allocator);
 
-    try validateDirectory(target_path);
+    try validateDirectory(opts.target_path);
 
-    const project_name = try deriveProjectName(allocator, target_path);
+    const project_name = try deriveProjectName(allocator, opts.target_path);
     defer allocator.free(project_name);
 
-    printInfo("Creating project \"{s}\" in {s}...", .{ project_name, target_path });
+    printInfo("Creating project \"{s}\" in {s}...", .{ project_name, opts.target_path });
 
-    try fetchTemplates(allocator, project_name, target_path);
-    try generateBuildFiles(allocator, project_name, target_path);
-    initGitRepo(allocator, project_name, target_path);
+    if (opts.templates_dir) |dir| {
+        try copyLocalTemplates(allocator, project_name, opts.target_path, dir);
+    } else {
+        try fetchTemplates(allocator, project_name, opts.target_path);
+    }
+    try generateBuildFiles(allocator, project_name, opts.target_path, opts.platform_path);
+    initGitRepo(allocator, project_name, opts.target_path, opts.platform_path);
 }
 
 // ---------------------------------------------------------------------------
 // CLI argument parsing
 // ---------------------------------------------------------------------------
 
-/// Parse CLI args and resolve to an absolute directory path.
-/// If no argument is provided, returns the current working directory.
-fn resolveTargetPath(allocator: std.mem.Allocator) ![]const u8 {
+/// Parse CLI args: positional target path plus optional flags.
+///   zig-webgpu-create-app [options] [directory]
+///     --templates-dir=PATH   Copy templates from a local directory instead of fetching from GitHub
+///     --platform-path=PATH   Use a local path dependency for zig-webgpu-platform instead of GitHub URL
+fn parseCliOptions(allocator: std.mem.Allocator) !CliOptions {
     var args = try std.process.argsWithAllocator(allocator);
     defer args.deinit();
 
-    // Skip argv[0] (the executable name).
+    // Skip argv[0].
     _ = args.next();
 
-    if (args.next()) |raw_path| {
-        // Resolve relative paths against CWD to get an absolute path.
-        return std.fs.cwd().realpathAlloc(allocator, raw_path) catch {
-            // Path doesn't exist yet — resolve manually against CWD.
-            const cwd = try std.process.getCwdAlloc(allocator);
-            defer allocator.free(cwd);
+    var opts: CliOptions = .{ .target_path = undefined };
+    var raw_target: ?[]const u8 = null;
 
-            if (std.fs.path.isAbsolute(raw_path)) {
-                return try allocator.dupe(u8, raw_path);
+    while (args.next()) |arg| {
+        if (parseFlag(arg, "--templates-dir=")) |val| {
+            opts.templates_dir = try resolveAbsolutePath(allocator, val);
+        } else if (parseFlag(arg, "--platform-path=")) |val| {
+            opts.platform_path = try resolveAbsolutePath(allocator, val);
+        } else if (std.mem.startsWith(u8, arg, "--")) {
+            printError("unknown flag: {s}", .{arg});
+            std.process.exit(1);
+        } else {
+            if (raw_target != null) {
+                printError("unexpected extra argument: {s}", .{arg});
+                std.process.exit(1);
             }
-            return try std.fs.path.resolve(allocator, &.{ cwd, raw_path });
-        };
+            raw_target = arg;
+        }
     }
 
-    // No argument: use current working directory.
-    return try std.process.getCwdAlloc(allocator);
+    if (raw_target) |rp| {
+        opts.target_path = try resolveAbsolutePath(allocator, rp);
+    } else {
+        opts.target_path = try std.process.getCwdAlloc(allocator);
+    }
+
+    return opts;
+}
+
+/// Extract the value portion of a `--flag=VALUE` argument, or null if it doesn't match.
+fn parseFlag(arg: []const u8, prefix: []const u8) ?[]const u8 {
+    if (std.mem.startsWith(u8, arg, prefix)) {
+        return arg[prefix.len..];
+    }
+    return null;
+}
+
+/// Resolve a possibly-relative path to an absolute path.
+fn resolveAbsolutePath(allocator: std.mem.Allocator, raw_path: []const u8) ![]const u8 {
+    return std.fs.cwd().realpathAlloc(allocator, raw_path) catch {
+        const cwd = try std.process.getCwdAlloc(allocator);
+        defer allocator.free(cwd);
+        if (std.fs.path.isAbsolute(raw_path)) {
+            return try allocator.dupe(u8, raw_path);
+        }
+        return try std.fs.path.resolve(allocator, &.{ cwd, raw_path });
+    };
 }
 
 // ---------------------------------------------------------------------------
@@ -198,6 +248,61 @@ const TEMPLATE_FILES = [_]TemplateFile{
     .{ .source = "index.html", .dest = "web/index.html" },
 };
 
+/// Copy template files from a local directory, substitute placeholders, and
+/// write them into the project directory. Used when --templates-dir is specified.
+fn copyLocalTemplates(allocator: std.mem.Allocator, project_name: []const u8, target_path: []const u8, templates_dir: []const u8) !void {
+    var src_dir = std.fs.openDirAbsolute(templates_dir, .{}) catch |err| {
+        printError("cannot open templates directory '{s}': {s}", .{ templates_dir, @errorName(err) });
+        std.process.exit(1);
+    };
+    defer src_dir.close();
+
+    var dst_dir = try std.fs.openDirAbsolute(target_path, .{});
+    defer dst_dir.close();
+
+    for (&TEMPLATE_FILES) |*tmpl| {
+        printInfo("  Copying {s}...", .{tmpl.source});
+
+        // Read the source file.
+        const content_raw = src_dir.readFileAlloc(allocator, tmpl.source, MAX_RESPONSE_SIZE) catch |err| {
+            printError("failed to read template '{s}': {s}", .{ tmpl.source, @errorName(err) });
+            std.process.exit(1);
+        };
+        defer allocator.free(content_raw);
+
+        // Substitute placeholders.
+        const content = try substitutePlaceholder(allocator, content_raw, project_name);
+        defer allocator.free(content);
+
+        // Create parent directories.
+        if (std.fs.path.dirname(tmpl.dest)) |parent| {
+            dst_dir.makePath(parent) catch |err| {
+                printError("failed to create directory '{s}': {s}", .{ parent, @errorName(err) });
+                std.process.exit(1);
+            };
+        }
+
+        // Write the file.
+        var file = dst_dir.createFile(tmpl.dest, .{}) catch |err| {
+            printError("failed to create file '{s}': {s}", .{ tmpl.dest, @errorName(err) });
+            std.process.exit(1);
+        };
+        defer file.close();
+
+        file.writeAll(content) catch |err| {
+            printError("failed to write file '{s}': {s}", .{ tmpl.dest, @errorName(err) });
+            std.process.exit(1);
+        };
+
+        if (tmpl.executable) {
+            file.setPermissions(.{ .inner = .{ .mode = 0o755 } }) catch |err| {
+                printError("failed to set executable permission on '{s}': {s}", .{ tmpl.dest, @errorName(err) });
+                std.process.exit(1);
+            };
+        }
+    }
+}
+
 /// Fetch all template files from GitHub, substitute placeholders, and write
 /// them into the project directory.
 fn fetchTemplates(allocator: std.mem.Allocator, project_name: []const u8, target_path: []const u8) !void {
@@ -314,14 +419,14 @@ fn substitutePlaceholder(allocator: std.mem.Allocator, input: []const u8, projec
     return output;
 }
 
-fn generateBuildFiles(allocator: std.mem.Allocator, project_name: []const u8, target_path: []const u8) !void {
+fn generateBuildFiles(allocator: std.mem.Allocator, project_name: []const u8, target_path: []const u8, platform_path: ?[]const u8) !void {
     printInfo("Generating build files...", .{});
 
     var dir = try std.fs.openDirAbsolute(target_path, .{});
     defer dir.close();
 
     try writeBuildZig(allocator, dir, project_name);
-    try writeBuildZigZon(allocator, dir, project_name);
+    try writeBuildZigZon(allocator, dir, project_name, platform_path, target_path);
 
     // Create src/ directory and write src/main.zig.
     dir.makeDir("src") catch |err| switch (err) {
@@ -329,6 +434,145 @@ fn generateBuildFiles(allocator: std.mem.Allocator, project_name: []const u8, ta
         else => return err,
     };
     try writeMainZig(allocator, dir, project_name);
+
+    // Zig requires a valid fingerprint in build.zig.zon. Run `zig build` once
+    // to get the suggested value, then patch the file.
+    try fixFingerprint(allocator, target_path);
+}
+
+/// Run `zig build` to discover the required fingerprint, then patch build.zig.zon.
+/// The placeholder 0x0000000000000000 triggers an error with the correct value.
+fn fixFingerprint(allocator: std.mem.Allocator, target_path: []const u8) !void {
+    printInfo("Resolving package fingerprint...", .{});
+
+    var child = std.process.Child.init(&.{ "zig", "build" }, allocator);
+    child.cwd = target_path;
+    child.stderr_behavior = .Pipe;
+    child.stdout_behavior = .Pipe;
+
+    child.spawn() catch |err| {
+        printError("could not run 'zig build' for fingerprint detection: {s}", .{@errorName(err)});
+        std.process.exit(1);
+    };
+
+    var stderr_buf: std.ArrayList(u8) = .empty;
+    defer stderr_buf.deinit(allocator);
+    var stdout_buf: std.ArrayList(u8) = .empty;
+    defer stdout_buf.deinit(allocator);
+
+    child.collectOutput(allocator, &stdout_buf, &stderr_buf, 256 * 1024) catch {};
+    _ = child.wait() catch {};
+
+    const stderr_output = stderr_buf.items;
+
+    // Look for: "use this value: 0x<hex>"
+    const marker = "use this value: ";
+    if (std.mem.indexOf(u8, stderr_output, marker)) |idx| {
+        const start = idx + marker.len;
+        // Find end of the hex value (until semicolon, newline, or end).
+        var end = start;
+        while (end < stderr_output.len and stderr_output[end] != '\n' and stderr_output[end] != ';') {
+            end += 1;
+        }
+        const fingerprint_str = stderr_output[start..end];
+
+        // Read the current build.zig.zon and replace the placeholder.
+        const zon_path = std.fs.path.join(allocator, &.{ target_path, "build.zig.zon" }) catch unreachable;
+        defer allocator.free(zon_path);
+
+        var zon_dir = std.fs.openDirAbsolute(target_path, .{}) catch unreachable;
+        defer zon_dir.close();
+
+        const zon_content = zon_dir.readFileAlloc(allocator, "build.zig.zon", MAX_RESPONSE_SIZE) catch |err| {
+            printError("failed to read build.zig.zon for fingerprint patching: {s}", .{@errorName(err)});
+            std.process.exit(1);
+        };
+        defer allocator.free(zon_content);
+
+        const patched = substitutePlaceholder2(allocator, zon_content, "0x0000000000000000", fingerprint_str) catch |err| {
+            printError("failed to patch fingerprint: {s}", .{@errorName(err)});
+            std.process.exit(1);
+        };
+        defer allocator.free(patched);
+
+        var file = zon_dir.createFile("build.zig.zon", .{}) catch |err| {
+            printError("failed to write patched build.zig.zon: {s}", .{@errorName(err)});
+            std.process.exit(1);
+        };
+        defer file.close();
+        file.writeAll(patched) catch |err| {
+            printError("failed to write patched build.zig.zon: {s}", .{@errorName(err)});
+            std.process.exit(1);
+        };
+
+        printInfo("  Fingerprint resolved: {s}", .{fingerprint_str});
+    } else {
+        // No fingerprint error — the placeholder was accepted or something else went wrong.
+        // Either way, continue and let the user discover any build errors themselves.
+        printInfo("  Warning: could not detect fingerprint suggestion from zig build output.", .{});
+    }
+}
+
+/// Compute a relative path from `from_dir` to `to_path`. Both must be absolute.
+/// E.g., from="/tmp/myapp" to="/home/user/platform" → "../../home/user/platform"
+fn computeRelativePath(allocator: std.mem.Allocator, from_dir: []const u8, to_path: []const u8) ![]u8 {
+    // Split both paths by separator and find the common prefix.
+    var from_parts: std.ArrayList([]const u8) = .empty;
+    defer from_parts.deinit(allocator);
+    var to_parts: std.ArrayList([]const u8) = .empty;
+    defer to_parts.deinit(allocator);
+
+    var from_iter = std.mem.splitScalar(u8, from_dir, '/');
+    while (from_iter.next()) |part| {
+        if (part.len > 0) try from_parts.append(allocator, part);
+    }
+    var to_iter = std.mem.splitScalar(u8, to_path, '/');
+    while (to_iter.next()) |part| {
+        if (part.len > 0) try to_parts.append(allocator, part);
+    }
+
+    // Find common prefix length.
+    const min_len = @min(from_parts.items.len, to_parts.items.len);
+    var common: usize = 0;
+    while (common < min_len and std.mem.eql(u8, from_parts.items[common], to_parts.items[common])) {
+        common += 1;
+    }
+
+    // Build relative path: go up for each remaining from_part, then down for each remaining to_part.
+    var result: std.ArrayList(u8) = .empty;
+    defer result.deinit(allocator);
+
+    const ups = from_parts.items.len - common;
+    for (0..ups) |i| {
+        if (i > 0) try result.append(allocator, '/');
+        try result.appendSlice(allocator, "..");
+    }
+
+    for (to_parts.items[common..]) |part| {
+        if (result.items.len > 0) try result.append(allocator, '/');
+        try result.appendSlice(allocator, part);
+    }
+
+    if (result.items.len == 0) {
+        return try allocator.dupe(u8, ".");
+    }
+
+    return try allocator.dupe(u8, result.items);
+}
+
+/// Simple string replacement (single occurrence). Like substitutePlaceholder but
+/// replaces an arbitrary needle rather than "{{PROJECT_NAME}}".
+fn substitutePlaceholder2(allocator: std.mem.Allocator, input: []const u8, needle: []const u8, replacement: []const u8) ![]u8 {
+    if (std.mem.indexOf(u8, input, needle)) |idx| {
+        const out_len = input.len - needle.len + replacement.len;
+        const output = try allocator.alloc(u8, out_len);
+        @memcpy(output[0..idx], input[0..idx]);
+        @memcpy(output[idx..][0..replacement.len], replacement);
+        const tail_start = idx + needle.len;
+        @memcpy(output[idx + replacement.len ..][0 .. input.len - tail_start], input[tail_start..]);
+        return output;
+    }
+    return try allocator.dupe(u8, input);
 }
 
 /// Generate the project's build.zig.
@@ -341,6 +585,7 @@ fn writeBuildZig(allocator: std.mem.Allocator, dir: std.fs.Dir, project_name: []
 
     try buf.appendSlice(allocator,
         \\const std = @import("std");
+        \\const platform_build = @import("zig_webgpu_platform");
         \\
         \\pub fn build(b: *std.Build) void {
         \\    const target = b.standardTargetOptions(.{});
@@ -359,16 +604,6 @@ fn writeBuildZig(allocator: std.mem.Allocator, dir: std.fs.Dir, project_name: []
         \\        .target = target,
         \\        .optimize = optimize,
         \\    });
-        \\
-        \\    // Fetch transitive dependencies through the platform dependency.
-        \\    const zgpu_dep = platform_dep.builder.dependency("zgpu", .{
-        \\        .target = target,
-        \\        .optimize = optimize,
-        \\    });
-        \\    const zglfw_dep = if (is_native) platform_dep.builder.dependency("zglfw", .{
-        \\        .target = target,
-        \\        .optimize = optimize,
-        \\    }) else null;
         \\
         \\    const root_module = b.createModule(.{
         \\        .root_source_file = b.path("src/main.zig"),
@@ -399,38 +634,8 @@ fn writeBuildZig(allocator: std.mem.Allocator, dir: std.fs.Dir, project_name: []
         \\            return;
         \\        }
         \\
-        \\        const zgpu_build = @import("zgpu");
-        \\        zgpu_build.addLibraryPathsTo(exe);
-        \\        zgpu_build.linkSystemDeps(b, exe);
-        \\
-        \\        exe.root_module.addIncludePath(zgpu_dep.path("libs/dawn/include"));
-        \\        exe.root_module.addIncludePath(zgpu_dep.path("src"));
-        \\
-        \\        exe.linkSystemLibrary("dawn");
-        \\        exe.linkLibC();
-        \\        exe.linkLibCpp();
-        \\
-        \\        if (target_os == .linux) {
-        \\            if (b.lazyDependency("system_sdk", .{})) |system_sdk| {
-        \\                if (target.result.cpu.arch.isX86()) {
-        \\                    exe.root_module.addLibraryPath(system_sdk.path("linux/lib/x86_64-linux-gnu"));
-        \\                }
-        \\            }
-        \\            exe.linkSystemLibrary("X11");
-        \\        }
-        \\
-        \\        if (zglfw_dep) |dep| {
-        \\            exe.root_module.linkLibrary(dep.artifact("glfw"));
-        \\        }
-        \\
-        \\        exe.root_module.addCSourceFile(.{
-        \\            .file = zgpu_dep.path("src/dawn.cpp"),
-        \\            .flags = &.{ "-std=c++17", "-fno-sanitize=undefined" },
-        \\        });
-        \\        exe.root_module.addCSourceFile(.{
-        \\            .file = zgpu_dep.path("src/dawn_proc.c"),
-        \\            .flags = &.{"-fno-sanitize=undefined"},
-        \\        });
+        \\        // Link Dawn, GLFW, and system dependencies through the platform helper.
+        \\        platform_build.linkNativeDeps(platform_dep, exe);
         \\    } else {
         \\        exe.export_memory = true;
         \\        exe.export_table = true;
@@ -495,12 +700,15 @@ fn writeBuildZig(allocator: std.mem.Allocator, dir: std.fs.Dir, project_name: []
 
 /// Generate the project's build.zig.zon.
 ///
-/// Uses a placeholder hash that `zig fetch --save` will replace.
-fn writeBuildZigZon(allocator: std.mem.Allocator, dir: std.fs.Dir, project_name: []const u8) !void {
+/// When platform_path is set, uses a `.path` dependency for local development.
+/// Otherwise, uses a `.url` + `.hash` placeholder that `zig fetch --save` will replace.
+fn writeBuildZigZon(allocator: std.mem.Allocator, dir: std.fs.Dir, project_name: []const u8, platform_path: ?[]const u8, target_dir_path: []const u8) !void {
     var buf: std.ArrayList(u8) = .empty;
     defer buf.deinit(allocator);
 
     try buf.print(allocator, ".{{\n    .name = .{s},\n", .{project_name});
+    // Placeholder fingerprint — will be patched by fixFingerprint() after initial `zig build`.
+    try buf.appendSlice(allocator, "    .fingerprint = 0x0000000000000000,\n");
     try buf.appendSlice(allocator,
         \\    .version = "0.1.0",
         \\
@@ -513,8 +721,24 @@ fn writeBuildZigZon(allocator: std.mem.Allocator, dir: std.fs.Dir, project_name:
         \\
         \\    .dependencies = .{
         \\        .zig_webgpu_platform = .{
-        \\            .url = "https://github.com/ttrei-org/zig-webgpu-platform/archive/master.tar.gz",
-        \\            .hash = "placeholder_run_zig_fetch_save",
+        \\
+    );
+
+    if (platform_path) |pp| {
+        // Zig requires relative paths in build.zig.zon. Compute the relative
+        // path from the project directory to the platform source.
+        const rel_path = try computeRelativePath(allocator, target_dir_path, pp);
+        defer allocator.free(rel_path);
+        try buf.print(allocator, "            .path = \"{s}\",\n", .{rel_path});
+    } else {
+        try buf.appendSlice(allocator,
+            \\            .url = "https://github.com/ttrei-org/zig-webgpu-platform/archive/master.tar.gz",
+            \\            .hash = "placeholder_run_zig_fetch_save",
+            \\
+        );
+    }
+
+    try buf.appendSlice(allocator,
         \\        },
         \\    },
         \\}
@@ -535,12 +759,65 @@ fn writeMainZig(allocator: std.mem.Allocator, dir: std.fs.Dir, project_name: []c
 
     try buf.appendSlice(allocator,
         \\const std = @import("std");
+        \\const builtin = @import("builtin");
         \\const platform = @import("platform");
         \\
         \\const Canvas = platform.Canvas;
         \\const Color = platform.Color;
         \\const AppInterface = platform.AppInterface;
         \\const MouseState = platform.MouseState;
+        \\
+        \\const is_wasm = builtin.cpu.arch.isWasm();
+        \\
+        \\// WASM overrides: the default std.log and panic handlers use threads/stderr
+        \\// which are not supported on wasm32-emscripten.
+        \\pub const std_options: std.Options = .{
+        \\    .log_level = .info,
+        \\    .logFn = if (is_wasm) wasmLogFn else std.log.defaultLog,
+        \\};
+        \\
+        \\fn wasmLogFn(
+        \\    comptime level: std.log.Level,
+        \\    comptime scope: @TypeOf(.EnumLiteral),
+        \\    comptime format: []const u8,
+        \\    args: anytype,
+        \\) void {
+        \\    _ = level;
+        \\    _ = scope;
+        \\    _ = format;
+        \\    _ = args;
+        \\}
+        \\
+        \\pub const panic = if (is_wasm) WasmPanic else std.debug.FullPanic(std.debug.defaultPanic);
+        \\
+        \\const WasmPanic = struct {
+        \\    pub fn call(_: []const u8, _: ?usize) noreturn { @trap(); }
+        \\    pub fn sentinelMismatch(_: anytype, _: anytype) noreturn { @trap(); }
+        \\    pub fn unwrapError(_: anyerror) noreturn { @trap(); }
+        \\    pub fn outOfBounds(_: usize, _: usize) noreturn { @trap(); }
+        \\    pub fn startGreaterThanEnd(_: usize, _: usize) noreturn { @trap(); }
+        \\    pub fn inactiveUnionField(_: anytype, _: anytype) noreturn { @trap(); }
+        \\    pub fn sliceCastLenRemainder(_: usize) noreturn { @trap(); }
+        \\    pub fn reachedUnreachable() noreturn { @trap(); }
+        \\    pub fn unwrapNull() noreturn { @trap(); }
+        \\    pub fn castToNull() noreturn { @trap(); }
+        \\    pub fn incorrectAlignment() noreturn { @trap(); }
+        \\    pub fn invalidErrorCode() noreturn { @trap(); }
+        \\    pub fn integerOutOfBounds() noreturn { @trap(); }
+        \\    pub fn integerOverflow() noreturn { @trap(); }
+        \\    pub fn shlOverflow() noreturn { @trap(); }
+        \\    pub fn shrOverflow() noreturn { @trap(); }
+        \\    pub fn divideByZero() noreturn { @trap(); }
+        \\    pub fn exactDivisionRemainder() noreturn { @trap(); }
+        \\    pub fn integerPartOutOfBounds() noreturn { @trap(); }
+        \\    pub fn corruptSwitch() noreturn { @trap(); }
+        \\    pub fn shiftRhsTooBig() noreturn { @trap(); }
+        \\    pub fn invalidEnumValue() noreturn { @trap(); }
+        \\    pub fn forLenMismatch() noreturn { @trap(); }
+        \\    pub fn copyLenMismatch() noreturn { @trap(); }
+        \\    pub fn memcpyAlias() noreturn { @trap(); }
+        \\    pub fn noreturnReturned() noreturn { @trap(); }
+        \\};
         \\
         \\pub const App = struct {
         \\    running: bool = true,
@@ -597,7 +874,10 @@ fn writeMainZig(allocator: std.mem.Allocator, dir: std.fs.Dir, project_name: []c
         \\    }
         \\};
         \\
-        \\pub fn main() void {
+        \\// For WASM builds, we need a custom entry point.
+        \\pub const main = if (!is_wasm) nativeMain else struct {};
+        \\
+        \\fn nativeMain() void {
         \\    var app = App.init();
         \\    var iface = app.appInterface();
         \\    defer iface.deinit();
@@ -613,6 +893,30 @@ fn writeMainZig(allocator: std.mem.Allocator, dir: std.fs.Dir, project_name: []c
         \\    });
         \\}
         \\
+        \\// WASM entry point: static storage because emscripten_set_main_loop doesn't return.
+        \\const wasm_entry = if (is_wasm) struct {
+        \\    var static_app: App = undefined;
+        \\    var static_iface: AppInterface = undefined;
+        \\
+        \\    pub fn wasm_main() callconv(.c) void {
+        \\        static_app = App.init();
+        \\        static_iface = static_app.appInterface();
+        \\        platform.run(&static_iface, .{
+        \\            .viewport = .{ .logical_width = 400.0, .logical_height = 300.0 },
+        \\        });
+        \\    }
+        \\} else struct {};
+        \\
+        \\comptime {
+        \\    if (is_wasm) {
+        \\        @export(&wasm_entry.wasm_main, .{ .name = "wasm_main" });
+        \\    }
+        \\}
+        \\
+        \\pub const _start = if (is_wasm) struct {
+        \\    fn entry() callconv(.c) void {}
+        \\}.entry else {};
+        \\
     );
 
     var src_dir = try dir.openDir("src", .{});
@@ -625,7 +929,7 @@ fn writeMainZig(allocator: std.mem.Allocator, dir: std.fs.Dir, project_name: []c
 /// Initialize a git repository, add playwright-cli submodule, run zig fetch,
 /// and create an initial commit. Git is optional (a warning is printed if
 /// missing), but zig is required for the fetch step.
-fn initGitRepo(allocator: std.mem.Allocator, project_name: []const u8, target_path: []const u8) void {
+fn initGitRepo(allocator: std.mem.Allocator, project_name: []const u8, target_path: []const u8, platform_path: ?[]const u8) void {
     // Step 1: git init
     printInfo("Initializing git repository...", .{});
     const git_available = runCommand(allocator, target_path, &.{ "git", "init" });
@@ -644,15 +948,19 @@ fn initGitRepo(allocator: std.mem.Allocator, project_name: []const u8, target_pa
         }
     }
 
-    // Step 3: zig fetch --save (required)
-    printInfo("Fetching zig-webgpu-platform dependency (this may take a moment)...", .{});
-    const zig_ok = runCommand(allocator, target_path, &.{
-        "zig",                                                                    "fetch", "--save",
-        "https://github.com/ttrei-org/zig-webgpu-platform/archive/master.tar.gz",
-    });
-    if (!zig_ok) {
-        printError("'zig fetch --save' failed. Ensure zig is installed and network is available.", .{});
-        std.process.exit(1);
+    // Step 3: zig fetch --save (only when using remote URL, not local path)
+    if (platform_path == null) {
+        printInfo("Fetching zig-webgpu-platform dependency (this may take a moment)...", .{});
+        const zig_ok = runCommand(allocator, target_path, &.{
+            "zig",                                                                    "fetch", "--save",
+            "https://github.com/ttrei-org/zig-webgpu-platform/archive/master.tar.gz",
+        });
+        if (!zig_ok) {
+            printError("'zig fetch --save' failed. Ensure zig is installed and network is available.", .{});
+            std.process.exit(1);
+        }
+    } else {
+        printInfo("Using local platform path — skipping zig fetch.", .{});
     }
 
     // Step 4: git add -A && git commit

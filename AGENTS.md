@@ -35,6 +35,31 @@ An optional second argument controls the wait time (seconds) before capturing, t
 
 ---
 
+## Integration Testing
+
+### Testing scaffolded projects locally
+
+When running the create-app integration test, use local flags since the GitHub repo may not be publicly accessible:
+```bash
+# Build the create-app tool
+zig build  # in create-app/ directory
+
+# Scaffold with local templates and path dependency
+create-app/zig-out/bin/zig-webgpu-create-app \
+  --templates-dir=create-app/templates \
+  --platform-path=/path/to/zig-webgpu-platform \
+  /tmp/test-project
+```
+
+### Playwright session caching
+
+If web screenshots show stale content, delete the Playwright session cache before retaking:
+```bash
+playwright-cli session-delete
+```
+
+---
+
 ## Zig Development
 
 Always use `zigdoc` to discover APIs for the Zig standard library and any third-party dependencies.

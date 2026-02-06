@@ -1,5 +1,113 @@
 const std = @import("std");
 
+/// Link all native dependencies (Dawn, GLFW, system SDKs) needed for a desktop
+/// build against zig-webgpu-platform. Consumer projects call this in their build.zig
+/// via `@import("zig_webgpu_platform").linkNativeDeps(platform_dep, exe)`.
+///
+/// This encapsulates the complex native linking (Dawn prebuilt library paths,
+/// system SDK paths, GLFW artifact, C++ source compilation) so consumer projects
+/// don't need to know the internal dependency structure.
+///
+/// Note: lazy dependencies (dawn prebuilts, system_sdk) are resolved through the
+/// platform's own builder, not the consumer's, because the consumer's build.zig.zon
+/// does not (and should not) list these transitive dependencies.
+pub fn linkNativeDeps(platform_dep: *std.Build.Dependency, exe: *std.Build.Step.Compile) void {
+    const target = exe.rootModuleTarget();
+    const target_os = target.os.tag;
+    const platform_b = platform_dep.builder;
+
+    // Access zgpu and zglfw through the platform's own dependency tree.
+    const zgpu_dep = platform_b.dependency("zgpu", .{
+        .target = exe.root_module.resolved_target.?,
+        .optimize = exe.root_module.optimize.?,
+    });
+
+    // Resolve Dawn prebuilt library paths through the platform's builder
+    // (not the consumer's) since the dawn lazy deps live in our build.zig.zon.
+    switch (target_os) {
+        .windows => {
+            if (platform_b.lazyDependency("dawn_x86_64_windows_gnu", .{})) |dawn_prebuilt| {
+                exe.addLibraryPath(dawn_prebuilt.path(""));
+            }
+        },
+        .linux => {
+            if (target.cpu.arch.isX86()) {
+                if (platform_b.lazyDependency("dawn_x86_64_linux_gnu", .{})) |dawn_prebuilt| {
+                    exe.addLibraryPath(dawn_prebuilt.path(""));
+                }
+            }
+            // Note: aarch64-linux is guarded against in the consumer's build.zig.
+        },
+        .macos => {
+            if (target.cpu.arch.isAARCH64()) {
+                if (platform_b.lazyDependency("dawn_aarch64_macos", .{})) |dawn_prebuilt| {
+                    exe.addLibraryPath(dawn_prebuilt.path(""));
+                }
+            } else if (target.cpu.arch.isX86()) {
+                if (platform_b.lazyDependency("dawn_x86_64_macos", .{})) |dawn_prebuilt| {
+                    exe.addLibraryPath(dawn_prebuilt.path(""));
+                }
+            }
+        },
+        else => {},
+    }
+
+    // Link system SDK through the platform's builder.
+    switch (target_os) {
+        .windows => {
+            if (platform_b.lazyDependency("system_sdk", .{})) |system_sdk| {
+                exe.addLibraryPath(system_sdk.path("windows/lib/x86_64-windows-gnu"));
+            }
+            exe.linkSystemLibrary("ole32");
+            exe.linkSystemLibrary("dxguid");
+        },
+        .linux => {
+            if (platform_b.lazyDependency("system_sdk", .{})) |system_sdk| {
+                if (target.cpu.arch.isX86()) {
+                    exe.root_module.addLibraryPath(system_sdk.path("linux/lib/x86_64-linux-gnu"));
+                }
+            }
+            exe.linkSystemLibrary("X11");
+        },
+        .macos => {
+            if (platform_b.lazyDependency("system_sdk", .{})) |system_sdk| {
+                exe.addLibraryPath(system_sdk.path("macos12/usr/lib"));
+                exe.addFrameworkPath(system_sdk.path("macos12/System/Library/Frameworks"));
+            }
+            exe.linkSystemLibrary("objc");
+            exe.linkFramework("Metal");
+            exe.linkFramework("CoreGraphics");
+            exe.linkFramework("Foundation");
+            exe.linkFramework("IOKit");
+            exe.linkFramework("IOSurface");
+            exe.linkFramework("QuartzCore");
+        },
+        else => {},
+    }
+
+    exe.root_module.addIncludePath(zgpu_dep.path("libs/dawn/include"));
+    exe.root_module.addIncludePath(zgpu_dep.path("src"));
+
+    exe.linkSystemLibrary("dawn");
+    exe.linkLibC();
+    exe.linkLibCpp();
+
+    const zglfw_dep = platform_b.dependency("zglfw", .{
+        .target = exe.root_module.resolved_target.?,
+        .optimize = exe.root_module.optimize.?,
+    });
+    exe.root_module.linkLibrary(zglfw_dep.artifact("glfw"));
+
+    exe.root_module.addCSourceFile(.{
+        .file = zgpu_dep.path("src/dawn.cpp"),
+        .flags = &.{ "-std=c++17", "-fno-sanitize=undefined" },
+    });
+    exe.root_module.addCSourceFile(.{
+        .file = zgpu_dep.path("src/dawn_proc.c"),
+        .flags = &.{"-fno-sanitize=undefined"},
+    });
+}
+
 pub fn build(b: *std.Build) void {
     const target = b.standardTargetOptions(.{});
     const optimize = b.standardOptimizeOption(.{});

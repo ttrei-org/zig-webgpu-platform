@@ -55,6 +55,9 @@ pub const Key = platform_mod.Key;
 // --- Internal modules (not exported, but needed for run()) ---
 const renderer_mod = @import("renderer.zig");
 const Renderer = renderer_mod.Renderer;
+const render_target_mod = @import("render_target.zig");
+const SwapChainRenderTarget = render_target_mod.SwapChainRenderTarget;
+const RenderTarget = render_target_mod.RenderTarget;
 
 /// True if building for native desktop (not WASM/web)
 pub const is_native = platform_mod.is_native;
@@ -68,6 +71,9 @@ const zglfw = if (is_native) @import("zglfw") else struct {};
 /// Desktop platform is only available for native builds
 const desktop = if (is_native) @import("platform/desktop.zig") else struct {};
 const headless = @import("platform/headless.zig");
+
+/// Web platform is only available for WASM builds
+const web = if (is_wasm) @import("platform/web.zig") else struct {};
 
 const log = std.log.scoped(.lib);
 
@@ -147,10 +153,7 @@ fn toLogicalCoordinates(mouse: MouseState, window_size: platform_mod.Size, viewp
 /// ```
 pub fn run(app: *AppInterface, options: RunOptions) void {
     if (is_wasm) {
-        // WASM builds use the existing wasm_main infrastructure in main.zig.
-        // The run() function is not the primary entry point for WASM.
-        // Instead, JavaScript calls wasm_main which sets up the main loop.
-        log.warn("run() called on WASM - use wasm_main instead", .{});
+        runWasm(app, options);
         return;
     }
 
@@ -347,6 +350,107 @@ fn runWindowed(app: *AppInterface, config: InternalConfig) void {
 }
 
 /// Run the application in headless mode (no window).
+/// Static storage for WASM global state.
+/// Using static variables because emscripten_set_main_loop with simulate_infinite_loop=1
+/// doesn't return, so stack-allocated variables would be invalid when the callback runs.
+var wasm_static = if (is_wasm) struct {
+    platform: web.WebPlatform = undefined,
+    renderer: Renderer = undefined,
+    swap_chain_target: SwapChainRenderTarget = undefined,
+    render_target: RenderTarget = undefined,
+    app_state: web.GlobalAppState = undefined,
+}{} else struct {}{};
+
+/// WASM-specific viewport stored for the main loop callback.
+var wasm_viewport: Viewport = DEFAULT_VIEWPORT;
+
+/// WASM-specific app interface pointer stored for the main loop callback.
+var wasm_app_ptr: ?*AppInterface = null;
+
+/// Run the platform on WASM (browser). Initializes WebGPU, creates the renderer
+/// and swap chain, and starts the emscripten main loop. This function does not
+/// return (emscripten_set_main_loop takes over).
+fn runWasm(app: *AppInterface, options: RunOptions) void {
+    if (!is_wasm) return;
+
+    log.info("initializing web platform", .{});
+
+    wasm_viewport = options.viewport;
+    wasm_app_ptr = app;
+
+    // Initialize web platform in static storage
+    wasm_static.platform = web.WebPlatform.init(std.heap.page_allocator);
+
+    // Get canvas dimensions for renderer initialization
+    const fb_size = wasm_static.platform.getFramebufferSize();
+    log.info("canvas size {}x{}", .{ fb_size.width, fb_size.height });
+
+    // Initialize WebGPU renderer for web platform
+    wasm_static.renderer = Renderer.initWeb(std.heap.page_allocator, fb_size.width, fb_size.height) catch |err| {
+        log.err("failed to initialize web renderer: {}", .{err});
+        return;
+    };
+    log.info("WebGPU renderer initialized", .{});
+
+    // Create SwapChainRenderTarget from the renderer's swap chain
+    wasm_static.swap_chain_target = wasm_static.renderer.createSwapChainRenderTarget();
+    wasm_static.render_target = wasm_static.swap_chain_target.render_target;
+    wasm_static.render_target.context = @ptrCast(&wasm_static.swap_chain_target);
+
+    // Initialize global app state for the main loop callback
+    wasm_static.app_state = .{
+        .platform = &wasm_static.platform,
+        .app_interface = app,
+        .renderer = &wasm_static.renderer,
+        .last_frame_time = web.emscripten.emscripten_get_now(),
+        .render_target = &wasm_static.render_target,
+    };
+
+    web.initGlobalAppState(&wasm_static.app_state);
+    web.setGlobalRenderer(&wasm_static.renderer);
+    web.setGlobalRenderTarget(&wasm_static.render_target);
+
+    log.info("starting main loop", .{});
+    web.emscripten.emscripten_set_main_loop(wasmMainLoopCallback, 0, 1);
+}
+
+/// Main loop callback for web platform, invoked by emscripten's requestAnimationFrame.
+fn wasmMainLoopCallback() callconv(.c) void {
+    if (!is_wasm) return;
+
+    const state = web.global_app_state orelse return;
+
+    // Calculate delta time
+    const current_time = web.emscripten.emscripten_get_now();
+    var delta_time: f32 = @floatCast((current_time - state.last_frame_time) / 1000.0);
+    state.last_frame_time = current_time;
+    if (delta_time > MAX_DELTA_TIME) delta_time = MAX_DELTA_TIME;
+
+    // Poll events and update
+    state.platform.pollEvents();
+    const raw_mouse = state.platform.getMouseState();
+    const mouse_state = toLogicalCoordinates(raw_mouse, state.platform.getWindowSize(), wasm_viewport);
+    state.app_interface.update(delta_time, mouse_state);
+
+    // Render
+    if (state.renderer) |renderer| {
+        if (renderer.isDeviceLost()) {
+            log.err("GPU device lost on web - requires page reload", .{});
+            web.emscripten.emscripten_cancel_main_loop();
+            return;
+        }
+        if (state.render_target) |rt| {
+            runFrame(state.app_interface, renderer, rt, wasm_viewport, null);
+        }
+    }
+
+    // Check for quit
+    if (state.platform.shouldClose() or !state.app_interface.isRunning()) {
+        log.info("quit requested, cancelling main loop", .{});
+        web.emscripten.emscripten_cancel_main_loop();
+    }
+}
+
 fn runHeadless(app: *AppInterface, config: InternalConfig) void {
     const zgpu = @import("zgpu");
 

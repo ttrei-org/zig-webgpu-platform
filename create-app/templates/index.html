@@ -157,7 +157,7 @@
                 // Initialize using the generated JS module
                 // The init() function handles WASM loading
                 // WebGPU initialization is handled by the WASM module via wgpu* bindings
-                const { instance, exports } = await init();
+                const { instance, exports } = await init("bin/{{PROJECT_NAME}}.wasm");
 
                 console.log("WASM module loaded");
                 console.log("Canvas size:", canvas.width, "x", canvas.height);

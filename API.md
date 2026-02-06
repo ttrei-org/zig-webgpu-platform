@@ -29,7 +29,13 @@ const platform_dep = b.dependency("zig_webgpu_platform", .{
     .optimize = optimize,
 });
 exe.root_module.addImport("platform", platform_dep.module("zig-webgpu-platform"));
+
+// For native (desktop) builds, link Dawn, GLFW, and system SDK dependencies:
+const platform_build = @import("zig_webgpu_platform");
+platform_build.linkNativeDeps(platform_dep, exe);
 ```
+
+`linkNativeDeps` resolves all transitive native dependencies (Dawn prebuilt libraries, GLFW, system SDKs, C++ sources) through the platform's own builder, so consumer projects don't need to list them in their `build.zig.zon`. Only call it for native targets — WASM builds don't need it.
 
 ### Library Import Pattern
 
@@ -54,7 +60,9 @@ const run = platform.run;
 const RunOptions = platform.RunOptions;
 ```
 
-### Minimal Example
+### Minimal Example (Native)
+
+`platform.run()` works on both native and WASM targets. On native it creates a GLFW window and runs the render loop directly. On WASM it creates a WebPlatform, initializes the WebGPU renderer, sets up the swap chain, and starts the emscripten main loop. Consumer code calls `platform.run(&iface, options)` in both cases.
 
 ```zig
 const std = @import("std");
@@ -125,6 +133,134 @@ pub fn main() void {
         .height = 600,
         .window_title = "My App",
     });
+}
+```
+
+---
+
+### WASM Entry Point
+
+WASM targets require additional boilerplate in `src/main.zig` because emscripten doesn't support threads or stderr. The key requirements:
+
+1. **`std_options`** — custom no-op `logFn` (default uses `Thread.getCurrentId()`, unavailable on emscripten)
+2. **`panic`** — custom panic namespace using `@trap()` (no stderr on emscripten)
+3. **`main`** — conditional: native uses `nativeMain`, WASM uses an empty struct
+4. **`wasm_main`** — exported entry using static storage (emscripten main loop doesn't return)
+5. **`_start`** — no-op stub to satisfy `std.start` checks on WASM
+
+```zig
+const std = @import("std");
+const builtin = @import("builtin");
+const platform = @import("platform");
+
+const Canvas = platform.Canvas;
+const Color = platform.Color;
+const AppInterface = platform.AppInterface;
+const MouseState = platform.MouseState;
+
+const is_wasm = builtin.cpu.arch.isWasm();
+
+// WASM overrides: the default std.log and panic handlers use threads/stderr
+// which are not supported on wasm32-emscripten.
+pub const std_options: std.Options = .{
+    .log_level = .info,
+    .logFn = if (is_wasm) wasmLogFn else std.log.defaultLog,
+};
+
+fn wasmLogFn(
+    comptime level: std.log.Level,
+    comptime scope: @TypeOf(.EnumLiteral),
+    comptime format: []const u8,
+    args: anytype,
+) void {
+    _ = level;
+    _ = scope;
+    _ = format;
+    _ = args;
+}
+
+pub const panic = if (is_wasm) WasmPanic else std.debug.FullPanic(std.debug.defaultPanic);
+
+const WasmPanic = struct {
+    pub fn call(_: []const u8, _: ?usize) noreturn { @trap(); }
+    pub fn sentinelMismatch(_: anytype, _: anytype) noreturn { @trap(); }
+    pub fn unwrapError(_: anyerror) noreturn { @trap(); }
+    pub fn outOfBounds(_: usize, _: usize) noreturn { @trap(); }
+    pub fn startGreaterThanEnd(_: usize, _: usize) noreturn { @trap(); }
+    pub fn inactiveUnionField(_: anytype, _: anytype) noreturn { @trap(); }
+    pub fn sliceCastLenRemainder(_: usize) noreturn { @trap(); }
+    pub fn reachedUnreachable() noreturn { @trap(); }
+    pub fn unwrapNull() noreturn { @trap(); }
+    pub fn castToNull() noreturn { @trap(); }
+    pub fn incorrectAlignment() noreturn { @trap(); }
+    pub fn invalidErrorCode() noreturn { @trap(); }
+    pub fn integerOutOfBounds() noreturn { @trap(); }
+    pub fn integerOverflow() noreturn { @trap(); }
+    pub fn shlOverflow() noreturn { @trap(); }
+    pub fn shrOverflow() noreturn { @trap(); }
+    pub fn divideByZero() noreturn { @trap(); }
+    pub fn exactDivisionRemainder() noreturn { @trap(); }
+    pub fn integerPartOutOfBounds() noreturn { @trap(); }
+    pub fn corruptSwitch() noreturn { @trap(); }
+    pub fn shiftRhsTooBig() noreturn { @trap(); }
+    pub fn invalidEnumValue() noreturn { @trap(); }
+    pub fn forLenMismatch() noreturn { @trap(); }
+    pub fn copyLenMismatch() noreturn { @trap(); }
+    pub fn memcpyAlias() noreturn { @trap(); }
+    pub fn noreturnReturned() noreturn { @trap(); }
+};
+
+pub const MyApp = struct {
+    // ... (same App struct as native example above)
+};
+
+// For WASM builds, we need a custom entry point.
+pub const main = if (!is_wasm) nativeMain else struct {};
+
+fn nativeMain() void {
+    var app = MyApp.init();
+    var iface = app.appInterface();
+    defer iface.deinit();
+
+    platform.run(&iface, .{
+        .viewport = .{ .logical_width = 400.0, .logical_height = 300.0 },
+        .width = 800,
+        .height = 600,
+        .window_title = "My App",
+    });
+}
+
+// WASM entry point: static storage because emscripten_set_main_loop doesn't return.
+const wasm_entry = if (is_wasm) struct {
+    var static_app: MyApp = undefined;
+    var static_iface: AppInterface = undefined;
+
+    pub fn wasm_main() callconv(.c) void {
+        static_app = MyApp.init();
+        static_iface = static_app.appInterface();
+        platform.run(&static_iface, .{
+            .viewport = .{ .logical_width = 400.0, .logical_height = 300.0 },
+        });
+    }
+} else struct {};
+
+comptime {
+    if (is_wasm) {
+        @export(&wasm_entry.wasm_main, .{ .name = "wasm_main" });
+    }
+}
+
+pub const _start = if (is_wasm) struct {
+    fn entry() callconv(.c) void {}
+}.entry else {};
+```
+
+The build.zig must also export the `wasm_main` symbol and disable the default entry for WASM:
+
+```zig
+if (is_wasm) {
+    exe.root_module.export_symbol_names = &.{"wasm_main"};
+    exe.entry = .disabled;
 }
 ```
 
@@ -511,7 +647,7 @@ pub const AppInterface = struct {
 
 ## Example Application
 
-A more complete example showing mouse-following behavior:
+A more complete native-only example showing mouse-following behavior (see [WASM Entry Point](#wasm-entry-point) above for cross-platform boilerplate):
 
 ```zig
 const std = @import("std");
@@ -605,7 +741,7 @@ pub fn main() void {
 
 ## RunOptions
 
-Configuration for the platform runner.
+Configuration for `platform.run()`. On native, it creates a GLFW window, initializes Dawn WebGPU, and runs the render loop. On WASM, it creates a WebPlatform, initializes the WebGPU renderer, sets up the swap chain, and starts the emscripten main loop. The same `RunOptions` struct is used on both targets.
 
 ```zig
 pub const RunOptions = struct {
@@ -629,7 +765,7 @@ pub const RunOptions = struct {
 };
 ```
 
-**Command-line overrides:** The runner accepts these CLI arguments:
+**Command-line overrides (native only):** The runner accepts these CLI arguments:
 - `--screenshot=<path>` - Take screenshot and exit
 - `--headless` - Run without a window
 - `--width=N` - Set window width

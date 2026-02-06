@@ -156,7 +156,7 @@ The `Platform` struct uses a function-pointer vtable for runtime polymorphism ac
 
 ### 2.5 Frame Orchestrator
 
-**Module:** `main.zig`
+**Module:** `lib.zig` (the `run()` entry point and internal `runFrame()`)
 **Role:** Wires everything together and owns the frame loop.
 
 The `runFrame()` function is the single source of truth for the per-frame pipeline:
@@ -165,10 +165,12 @@ The `runFrame()` function is the single source of truth for the per-frame pipeli
 beginFrame → setLogicalSize → beginRenderPass → app.render(canvas) → flushBatch → endRenderPass → [pre-submit hook] → endFrame
 ```
 
-Three entry paths call `runFrame`:
+Three entry paths call `runFrame` (all inside `lib.zig`):
 1. **`runWindowed`** — GLFW event loop with delta time and resize handling
 2. **`runHeadless`** — Fixed frame count with staging buffer copy hook
-3. **`wasm_main` + callback** — `emscripten_set_main_loop` + `requestAnimationFrame`
+3. **`runWasm`** — Initializes WebGPU renderer + swap chain in static storage, then calls `emscripten_set_main_loop` (does not return; the callback invokes `runFrame` on each `requestAnimationFrame`)
+
+Consumer projects call `platform.run(&iface, .{})` and the correct path is chosen automatically based on the build target. For WASM, all state (platform, renderer, swap chain, render target) lives in module-level static variables because `emscripten_set_main_loop` with `simulate_infinite_loop=1` never returns.
 
 ---
 
@@ -244,6 +246,8 @@ The web build is notable for **not requiring the Emscripten SDK**. Instead:
   - Emscripten stubs (`emscripten_set_main_loop` → `requestAnimationFrame`)
   - Pre-initialization: creates adapter + device *before* WASM loads (solves async gap)
 
+Consumer projects get WASM support for free via `lib.run()` — all WebGPU initialization, swap chain creation, and emscripten main loop setup is handled internally. The HTML host page only needs to pass the correct WASM binary path (e.g. `bin/<name>.wasm`) to the JS `init()` function.
+
 ### 4.3 Headless Architecture
 
 Headless mode enables CI/automated testing without a display:
@@ -252,6 +256,23 @@ Headless mode enables CI/automated testing without a display:
 - A `PreSubmitHook` copies the rendered texture to the staging buffer before command submission
 - `zigimg` encodes the pixel data to PNG
 - Invoked via: `xvfb-run zig build run -- --headless --screenshot=/tmp/out.png`
+
+### 4.4 Build Integration for Consumer Projects
+
+**Module:** `build.zig` — `linkNativeDeps(platform_dep, exe)`
+
+Consumer projects add `zig-webgpu-platform` as a Zig dependency and import the library module. For native (non-WASM) builds, they must also link the native toolchain (Dawn, GLFW, system SDKs, C++ sources). The public `linkNativeDeps` function encapsulates all of this:
+
+```zig
+const platform_dep = b.dependency("zig_webgpu_platform", .{ .target = target, .optimize = optimize });
+exe.root_module.addImport("zig-webgpu-platform", platform_dep.module("zig-webgpu-platform"));
+
+// Link Dawn, GLFW, system SDKs — one call, no transitive deps needed
+const platform_build = @import("zig_webgpu_platform");
+platform_build.linkNativeDeps(platform_dep, exe);
+```
+
+Key design choice: `linkNativeDeps` resolves all lazy dependencies (dawn prebuilts, system_sdk, zgpu, zglfw) through **the platform's own builder** (`platform_dep.builder`), not the consumer's. This means the consumer's `build.zig.zon` only needs to declare `zig-webgpu-platform` itself — no transitive dependencies.
 
 ---
 
@@ -344,11 +365,31 @@ Resolution independence. Applications draw at a fixed logical size, and the plat
 
 ---
 
+## 7. Tooling: create-app
+
+**Module:** `create-app/src/main.zig`
+**Role:** Scaffolds new projects that depend on zig-webgpu-platform.
+
+The `zig-webgpu-create-app` CLI creates a ready-to-build project directory with `build.zig`, `build.zig.zon`, template source files, web assets, and a git repository.
+
+**CLI flags:**
+
+| Flag | Description |
+|---|---|
+| `--templates-dir=PATH` | Copy templates from a local directory instead of fetching from GitHub (for development/testing) |
+| `--platform-path=PATH` | Use a local path dependency instead of a GitHub URL; generates a relative path in `build.zig.zon` |
+
+**Fingerprint auto-resolution:** After generating `build.zig.zon` with a placeholder fingerprint (`0x0000000000000000`), the tool runs `zig build`, captures the compiler's fingerprint suggestion from stderr, and patches `build.zig.zon` with the correct value. This avoids requiring the user to manually fix the fingerprint.
+
+**Template `index.html`:** The generated HTML passes `bin/{{PROJECT_NAME}}.wasm` to the JS `init()` function so the browser fetches the correct WASM binary from Zig's output structure.
+
+---
+
 ## 8. File Map
 
 | File | Lines | Role | Layer |
 |---|---|---|---|
-| `src/lib.zig` | ~560 | **Library entry point** - exports public API + run() | **Public API** |
+| `src/lib.zig` | ~660 | **Library entry point** - exports public API + run() (native + WASM) | **Public API** |
 | `src/canvas.zig` | ~450 | Shape drawing API | **Public API** |
 | `src/color.zig` | ~110 | Color type | **Public API** |
 | `src/app_interface.zig` | ~150 | Application interface (vtable) | **Public API** |
@@ -363,10 +404,10 @@ Resolution independence. Applications draw at a fixed logical size, and the plat
 | `src/shaders/triangle.wgsl` | ~70 | GPU shader | Internal |
 | `web/index.html` | ~200 | Web host page | Web infra |
 | `web/wasm_bindings.js` | ~1500 | JS WebGPU bridge | Web infra |
-| `build.zig` | ~220 | Build configuration + module export | Build |
+| `build.zig` | ~330 | Build configuration + module export + `linkNativeDeps()` public helper | Build |
 | `create-app/build.zig` | ~40 | Build config for create-app CLI tool (exe + tests) | Tooling |
 | `create-app/build.zig.zon` | ~15 | Package manifest for create-app (no deps) | Tooling |
-| `create-app/src/main.zig` | ~810 | Scaffolding tool: CLI parsing, validation, code gen, HTTP template fetching, git init | Tooling |
+| `create-app/src/main.zig` | ~810 | Scaffolding tool: CLI parsing, validation, code gen, template fetching (HTTP or local), fingerprint resolution, git init | Tooling |
 | `create-app/templates/` | — | Template files fetched at runtime during project scaffolding | Tooling |
 | `create-app/templates/AGENTS.md` | ~170 | Template AGENTS.md for scaffolded projects | Tooling |
 | `create-app/templates/DESIGN.md` | ~100 | Template DESIGN.md skeleton for scaffolded projects | Tooling |
