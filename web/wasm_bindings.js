@@ -435,6 +435,9 @@ const emscriptenStubs = {
     emscripten_set_mousemove_callback_on_thread: (target, userData, useCapture, callback, thread) => 0,
     emscripten_set_mousedown_callback_on_thread: (target, userData, useCapture, callback, thread) => 0,
     emscripten_set_mouseup_callback_on_thread: (target, userData, useCapture, callback, thread) => 0,
+    emscripten_set_keydown_callback_on_thread: (target, userData, useCapture, callback, thread) => 0,
+    emscripten_set_keyup_callback_on_thread: (target, userData, useCapture, callback, thread) => 0,
+    emscripten_set_keypress_callback_on_thread: (target, userData, useCapture, callback, thread) => 0,
     emscripten_html5_remove_all_event_listeners: () => {},
 };
 
@@ -1552,6 +1555,43 @@ export async function init(wasmPath) {
         dbg("Mouse event listeners registered on canvas");
     } else {
         console.warn("Could not register mouse event listeners: missing canvas or WASM exports");
+    }
+
+    // Wire up keyboard event listeners on the window.
+    // Keyboard events are registered on `window` (not the canvas) because keyboard
+    // events require focus and the canvas may not always have it.
+    // Maps DOM event.code strings to Key enum ordinals:
+    //   Escape=0, Space=1, Enter=2, ArrowUp=3, ArrowDown=4, ArrowLeft=5, ArrowRight=6
+    if (exports.web_update_key_state) {
+        const keyCodeMap = {
+            "Escape": 0,
+            "Space": 1,
+            "Enter": 2,
+            "ArrowUp": 3,
+            "ArrowDown": 4,
+            "ArrowLeft": 5,
+            "ArrowRight": 6,
+        };
+
+        window.addEventListener("keydown", (e) => {
+            const keyCode = keyCodeMap[e.code];
+            if (keyCode !== undefined) {
+                exports.web_update_key_state(keyCode, true);
+                e.preventDefault();
+            }
+        });
+
+        window.addEventListener("keyup", (e) => {
+            const keyCode = keyCodeMap[e.code];
+            if (keyCode !== undefined) {
+                exports.web_update_key_state(keyCode, false);
+                e.preventDefault();
+            }
+        });
+
+        dbg("Keyboard event listeners registered on window");
+    } else {
+        console.warn("Could not register keyboard event listeners: missing WASM export web_update_key_state");
     }
 
     return {

@@ -917,10 +917,16 @@ pub const WebPlatform = struct {
     canvas_selector: [*:0]const u8,
     /// Current mouse state, updated by browser event callbacks.
     mouse_state: MouseState,
+    /// Current keyboard state, indexed by Key enum ordinal.
+    /// Updated by JavaScript keyboard event listeners via web_update_key_state().
+    key_states: [KEY_COUNT]bool,
     /// Whether a quit has been requested (e.g., page unload).
     quit_requested: bool,
     /// Frame counter for timing and debugging.
     frame_count: u64,
+
+    /// Number of keys in the Key enum, used to size the key state array.
+    const KEY_COUNT = @typeInfo(Key).@"enum".fields.len;
 
     /// Initialize the web platform by querying the canvas element.
     ///
@@ -1025,6 +1031,7 @@ pub const WebPlatform = struct {
                 .right_pressed = false,
                 .middle_pressed = false,
             },
+            .key_states = [_]bool{false} ** KEY_COUNT,
             .quit_requested = false,
             .frame_count = 0,
         };
@@ -1156,6 +1163,7 @@ pub const WebPlatform = struct {
             .right_pressed = false,
             .middle_pressed = false,
         };
+        self.key_states = [_]bool{false} ** KEY_COUNT;
 
         log.info("web platform cleanup complete", .{});
     }
@@ -1195,10 +1203,15 @@ pub const WebPlatform = struct {
     }
 
     /// Check if a key is currently pressed.
-    /// Key state is updated by JavaScript keyboard event handlers.
-    pub fn isKeyPressed(_: *const Self, _: Key) bool {
-        // TODO: Implement when keyboard bindings are added
-        return false;
+    /// Key state is updated by JavaScript keyboard event listeners via web_update_key_state().
+    pub fn isKeyPressed(self: *const Self, key: Key) bool {
+        return self.key_states[@intFromEnum(key)];
+    }
+
+    /// Update key state from JavaScript callback.
+    /// Called by the exported web_update_key_state function when a keyboard event fires.
+    pub fn updateKeyState(self: *Self, key: Key, pressed: bool) void {
+        self.key_states[@intFromEnum(key)] = pressed;
     }
 
     /// Get the current mouse state.
@@ -1558,6 +1571,17 @@ export fn web_update_mouse_button(button: u32, pressed: bool) callconv(.c) void 
 export fn web_update_canvas_size(width: u32, height: u32) callconv(.c) void {
     if (global_web_platform) |p| {
         p.updateCanvasSize(width, height);
+    }
+}
+
+/// Exported function for JavaScript to update keyboard key state.
+/// key_code: Numeric value matching the Key enum ordinal
+///   (0=escape, 1=space, 2=enter, 3=up, 4=down, 5=left, 6=right)
+/// pressed: true if key was pressed, false if released
+export fn web_update_key_state(key_code: u32, pressed: bool) callconv(.c) void {
+    if (global_web_platform) |p| {
+        const key = std.meta.intToEnum(Key, key_code) catch return;
+        p.updateKeyState(key, pressed);
     }
 }
 

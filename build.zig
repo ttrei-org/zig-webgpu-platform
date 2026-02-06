@@ -249,6 +249,7 @@ pub fn build(b: *std.Build) void {
             "wasm_main", // Our custom WASM entry point
             "web_update_mouse_position", // JS → WASM mouse move events
             "web_update_mouse_button", // JS → WASM mouse button events
+            "web_update_key_state", // JS → WASM keyboard events
             "web_update_canvas_size", // JS → WASM canvas resize events
             "web_request_quit", // JS → WASM quit request
         };
