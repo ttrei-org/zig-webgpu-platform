@@ -440,6 +440,22 @@ fn wasmMainLoopCallback() callconv(.c) void {
             return;
         }
         if (state.render_target) |rt| {
+            // Check if canvas was resized (JS updates WebPlatform.width/height
+            // via web_update_canvas_size), and recreate the swap chain to match.
+            const current_fb = state.platform.getFramebufferSize();
+            if (current_fb.width > 0 and current_fb.height > 0) {
+                if (rt.needsResize(current_fb.width, current_fb.height)) {
+                    log.info("canvas resized to {}x{}, resizing swap chain", .{ current_fb.width, current_fb.height });
+                    rt.resize(current_fb.width, current_fb.height) catch |err| {
+                        log.warn("failed to resize render target: {}", .{err});
+                        return;
+                    };
+                }
+            } else {
+                // Zero-size canvas (e.g., tab hidden) — skip frame
+                return;
+            }
+
             runFrame(state.app_interface, renderer, rt, wasm_viewport, null);
         }
     }

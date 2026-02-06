@@ -129,6 +129,9 @@
 
         import { init } from "./{{PROJECT_NAME}}.js";
 
+        // Hoisted so resizeCanvas() can notify WASM after init completes
+        let wasmExports = null;
+
         async function main() {
             // Check for WebGPU support before anything else
             if (!navigator.gpu) {
@@ -142,12 +145,19 @@
                 return;
             }
 
-            // Set canvas size to match window, accounting for device pixel ratio
+            // Set canvas size to match window, accounting for device pixel ratio.
+            // After WASM init, also notifies the WASM side so the swap chain
+            // can be resized to match the new canvas dimensions.
             function resizeCanvas() {
                 const dpr = window.devicePixelRatio || 1;
                 canvas.width = Math.floor(window.innerWidth * dpr);
                 canvas.height = Math.floor(window.innerHeight * dpr);
                 console.log("Canvas resized: " + canvas.width + "x" + canvas.height + " (dpr=" + dpr + ")");
+
+                // Propagate new size to WASM so the swap chain can be recreated
+                if (wasmExports && wasmExports.web_update_canvas_size) {
+                    wasmExports.web_update_canvas_size(canvas.width, canvas.height);
+                }
             }
             resizeCanvas();
             window.addEventListener("resize", resizeCanvas);
@@ -158,6 +168,7 @@
                 // The init() function handles WASM loading
                 // WebGPU initialization is handled by the WASM module via wgpu* bindings
                 const { instance, exports } = await init("bin/{{PROJECT_NAME}}.wasm");
+                wasmExports = exports;
 
                 console.log("WASM module loaded");
                 console.log("Canvas size:", canvas.width, "x", canvas.height);
