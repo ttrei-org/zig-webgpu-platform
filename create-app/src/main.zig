@@ -5,7 +5,8 @@
 //! from the GitHub repository and the platform dependency is resolved via
 //! `zig fetch`.
 //!
-//! Usage: zig-webgpu-create-app [directory]
+//! Usage: zig-webgpu-create-app [options] [directory]
+//!   -h, --help   Show usage information and exit.
 //!   If no directory is given, uses the current working directory.
 
 const std = @import("std");
@@ -66,12 +67,17 @@ fn parseCliOptions(allocator: std.mem.Allocator) !CliOptions {
     var raw_target: ?[]const u8 = null;
 
     while (args.next()) |arg| {
-        if (std.mem.startsWith(u8, arg, "--")) {
+        if (std.mem.eql(u8, arg, "--help") or std.mem.eql(u8, arg, "-h")) {
+            printUsage();
+            std.process.exit(0);
+        } else if (std.mem.startsWith(u8, arg, "-")) {
             printError("unknown flag: {s}", .{arg});
+            printUsage();
             std.process.exit(1);
         } else {
             if (raw_target != null) {
                 printError("unexpected extra argument: {s}", .{arg});
+                printUsage();
                 std.process.exit(1);
             }
             raw_target = arg;
@@ -84,6 +90,32 @@ fn parseCliOptions(allocator: std.mem.Allocator) !CliOptions {
         try std.process.getCwdAlloc(allocator);
 
     return .{ .target_path = target_path };
+}
+
+/// Print usage information to stderr.
+fn printUsage() void {
+    printInfo(
+        \\zig-webgpu-create-app: scaffold a new zig-webgpu-platform project
+        \\
+        \\Usage: zig-webgpu-create-app [options] [directory]
+        \\
+        \\Creates a ready-to-build project with WebGPU graphics support for
+        \\both native desktop (Dawn/GLFW) and web (WASM/emscripten) targets.
+        \\
+        \\Arguments:
+        \\  directory    Target directory for the new project.
+        \\               If omitted, the current working directory is used.
+        \\               The directory must be empty or not yet exist.
+        \\               The project name is derived from the directory basename.
+        \\
+        \\Options:
+        \\  -h, --help   Show this help message and exit.
+        \\
+        \\Examples:
+        \\  zig-webgpu-create-app my-game       Create project in ./my-game/
+        \\  zig-webgpu-create-app /tmp/demo      Create project at an absolute path
+        \\  zig-webgpu-create-app                Use current directory (must be empty)
+    , .{});
 }
 
 /// Resolve a possibly-relative path to an absolute path.
