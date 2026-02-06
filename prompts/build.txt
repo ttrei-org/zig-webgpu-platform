@@ -13,7 +13,7 @@ Compare screenshots of both native and web (see AGENTS.md on how to use playwrig
 
 7. IMPORTANT: The create-app scaffolding tool generates projects that depend on specific platform exports (library module name, web/ file paths, dependency names, linking patterns). If your changes touch any of these — the library module export in build.zig, web/wasm_bindings.js, web/index.html, dependency names in build.zig.zon, or the Dawn/GLFW/zgpu linking pattern — you MUST re-test the create-app tool before committing:
    zig build                                    (in create-app/ directory)
-   create-app/zig-out/bin/zig-webgpu-create-app --templates-dir=create-app/templates --platform-path=. /tmp/test-scaffold-project
+   create-app/zig-out/bin/zig-webgpu-create-app /tmp/test-scaffold-project
    zig build                                    (in /tmp/test-scaffold-project)
    zig build -Dtarget=wasm32-emscripten          (in /tmp/test-scaffold-project)
 

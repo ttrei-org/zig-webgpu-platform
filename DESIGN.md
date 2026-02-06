@@ -372,18 +372,11 @@ Resolution independence. Applications draw at a fixed logical size, and the plat
 
 The `zig-webgpu-create-app` CLI creates a ready-to-build project directory with `build.zig`, `build.zig.zon`, template source files, web assets, and a git repository.
 
-**CLI flags:**
-
-| Flag | Description |
-|---|---|
-| `--templates-dir=PATH` | Copy templates from a local directory instead of fetching from GitHub (for development/testing) |
-| `--platform-path=PATH` | Use a local path dependency instead of a GitHub URL; generates a relative path in `build.zig.zon` |
-
 **Fingerprint auto-resolution:** After generating `build.zig.zon` with a placeholder fingerprint (`0x0000000000000000`), the tool runs `zig build`, captures the compiler's fingerprint suggestion from stderr, and patches `build.zig.zon` with the correct value. This avoids requiring the user to manually fix the fingerprint.
 
-**Template location:** `create-app/templates/` contains all template files: `AGENTS.md`, `DESIGN.md`, `serve.py`, `scripts/web_screenshot.sh`, `index.html`, `playwright-cli.json`, `gitignore`. When `--templates-dir` is not specified, the tool clones the repository via `git clone --depth=1 --sparse` (using SSH) and copies templates from the clone. With `--templates-dir`, files are copied from the local directory directly.
+**Template location:** `create-app/templates/` contains all template files: `AGENTS.md`, `DESIGN.md`, `serve.py`, `scripts/web_screenshot.sh`, `index.html`, `playwright-cli.json`, `gitignore`. The tool clones the repository via `git clone --depth=1 --sparse` (using SSH) and copies templates from the clone.
 
-**Dependency URL:** The generated `build.zig.zon` uses a `git+https://` URL for the zig-webgpu-platform dependency. When `--platform-path` is specified, a relative path dependency is used instead.
+**Dependency URL:** The generated `build.zig.zon` uses a `git+https://` URL for the zig-webgpu-platform dependency, resolved by `zig fetch --save` during scaffolding.
 
 **Template `index.html`:** The generated HTML passes `bin/{{PROJECT_NAME}}.wasm` to the JS `init()` function so the browser fetches the correct WASM binary from Zig's output structure.
 
@@ -418,11 +411,8 @@ Re-testing procedure:
 # Build the create-app tool
 zig build   # in create-app/ directory
 
-# Scaffold with local templates and path dependency
-create-app/zig-out/bin/zig-webgpu-create-app \
-  --templates-dir=create-app/templates \
-  --platform-path=/path/to/zig-webgpu-platform \
-  /tmp/test-scaffold-project
+# Scaffold a test project (fetches templates from GitHub, resolves dependency)
+create-app/zig-out/bin/zig-webgpu-create-app /tmp/test-scaffold-project
 
 # Verify the scaffolded project builds
 zig build                                 # in /tmp/test-scaffold-project

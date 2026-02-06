@@ -39,16 +39,17 @@ An optional second argument controls the wait time (seconds) before capturing, t
 
 ### Testing scaffolded projects locally
 
-When running the create-app integration test, use local flags since the GitHub repo may not be publicly accessible:
+To test the create-app scaffolding tool end-to-end:
 ```bash
 # Build the create-app tool
 zig build  # in create-app/ directory
 
-# Scaffold with local templates and path dependency
-create-app/zig-out/bin/zig-webgpu-create-app \
-  --templates-dir=create-app/templates \
-  --platform-path=/path/to/zig-webgpu-platform \
-  /tmp/test-project
+# Scaffold a test project (fetches templates from GitHub, resolves dependency)
+create-app/zig-out/bin/zig-webgpu-create-app /tmp/test-project
+
+# Verify the scaffolded project builds
+zig build                              # in /tmp/test-project
+zig build -Dtarget=wasm32-emscripten   # in /tmp/test-project
 ```
 
 ### Playwright session caching

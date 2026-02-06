@@ -1,7 +1,9 @@
 //! zig-webgpu-create-app: scaffolding tool for new zig-webgpu-platform projects.
 //!
 //! Creates a ready-to-build project directory with build configuration,
-//! template files, and git repository initialization.
+//! template files, and git repository initialization. Templates are fetched
+//! from the GitHub repository and the platform dependency is resolved via
+//! `zig fetch`.
 //!
 //! Usage: zig-webgpu-create-app [directory]
 //!   If no directory is given, uses the current working directory.
@@ -24,13 +26,9 @@ pub fn main() !void {
 /// Parsed CLI options.
 const CliOptions = struct {
     target_path: []const u8,
-    templates_dir: ?[]const u8 = null,
-    platform_path: ?[]const u8 = null,
 
     fn deinit(self: *const CliOptions, allocator: std.mem.Allocator) void {
         allocator.free(self.target_path);
-        if (self.templates_dir) |p| allocator.free(p);
-        if (self.platform_path) |p| allocator.free(p);
     }
 };
 
@@ -46,23 +44,18 @@ fn run(allocator: std.mem.Allocator) !void {
 
     printInfo("Creating project \"{s}\" in {s}...", .{ project_name, opts.target_path });
 
-    if (opts.templates_dir) |dir| {
-        try copyLocalTemplates(allocator, project_name, opts.target_path, dir);
-    } else {
-        try fetchTemplates(allocator, project_name, opts.target_path);
-    }
-    try generateBuildFiles(allocator, project_name, opts.target_path, opts.platform_path);
-    initGitRepo(allocator, project_name, opts.target_path, opts.platform_path);
+    try fetchTemplates(allocator, project_name, opts.target_path);
+    try generateBuildFiles(allocator, project_name, opts.target_path);
+    initGitRepo(allocator, project_name, opts.target_path);
 }
 
 // ---------------------------------------------------------------------------
 // CLI argument parsing
 // ---------------------------------------------------------------------------
 
-/// Parse CLI args: positional target path plus optional flags.
-///   zig-webgpu-create-app [options] [directory]
-///     --templates-dir=PATH   Copy templates from a local directory instead of fetching from GitHub
-///     --platform-path=PATH   Use a local path dependency for zig-webgpu-platform instead of GitHub URL
+/// Parse CLI args: positional target path.
+///   zig-webgpu-create-app [directory]
+///     If no directory is given, uses the current working directory.
 fn parseCliOptions(allocator: std.mem.Allocator) !CliOptions {
     var args = try std.process.argsWithAllocator(allocator);
     defer args.deinit();
@@ -70,15 +63,10 @@ fn parseCliOptions(allocator: std.mem.Allocator) !CliOptions {
     // Skip argv[0].
     _ = args.next();
 
-    var opts: CliOptions = .{ .target_path = undefined };
     var raw_target: ?[]const u8 = null;
 
     while (args.next()) |arg| {
-        if (parseFlag(arg, "--templates-dir=")) |val| {
-            opts.templates_dir = try resolveAbsolutePath(allocator, val);
-        } else if (parseFlag(arg, "--platform-path=")) |val| {
-            opts.platform_path = try resolveAbsolutePath(allocator, val);
-        } else if (std.mem.startsWith(u8, arg, "--")) {
+        if (std.mem.startsWith(u8, arg, "--")) {
             printError("unknown flag: {s}", .{arg});
             std.process.exit(1);
         } else {
@@ -90,21 +78,12 @@ fn parseCliOptions(allocator: std.mem.Allocator) !CliOptions {
         }
     }
 
-    if (raw_target) |rp| {
-        opts.target_path = try resolveAbsolutePath(allocator, rp);
-    } else {
-        opts.target_path = try std.process.getCwdAlloc(allocator);
-    }
+    const target_path = if (raw_target) |rp|
+        try resolveAbsolutePath(allocator, rp)
+    else
+        try std.process.getCwdAlloc(allocator);
 
-    return opts;
-}
-
-/// Extract the value portion of a `--flag=VALUE` argument, or null if it doesn't match.
-fn parseFlag(arg: []const u8, prefix: []const u8) ?[]const u8 {
-    if (std.mem.startsWith(u8, arg, prefix)) {
-        return arg[prefix.len..];
-    }
-    return null;
+    return .{ .target_path = target_path };
 }
 
 /// Resolve a possibly-relative path to an absolute path.
@@ -248,8 +227,8 @@ const TEMPLATE_FILES = [_]TemplateFile{
     .{ .source = "index.html", .dest = "web/index.html" },
 };
 
-/// Copy template files from a local directory, substitute placeholders, and
-/// write them into the project directory. Used when --templates-dir is specified.
+/// Copy template files from a source directory, substitute placeholders, and
+/// write them into the project directory. Used internally by fetchTemplates().
 fn copyLocalTemplates(allocator: std.mem.Allocator, project_name: []const u8, target_path: []const u8, templates_dir: []const u8) !void {
     var src_dir = std.fs.openDirAbsolute(templates_dir, .{}) catch |err| {
         printError("cannot open templates directory '{s}': {s}", .{ templates_dir, @errorName(err) });
@@ -321,8 +300,7 @@ fn fetchTemplates(allocator: std.mem.Allocator, project_name: []const u8, target
     })) {
         printError(
             "failed to clone {s}\n" ++
-                "  Ensure git is installed and you have SSH access to the repository.\n" ++
-                "  Alternatively, use --templates-dir to provide templates from a local directory.",
+                "  Ensure git is installed and you have SSH access to the repository.",
             .{REPO_GIT_URL},
         );
         std.process.exit(1);
@@ -390,14 +368,14 @@ fn substitutePlaceholder(allocator: std.mem.Allocator, input: []const u8, projec
     return output;
 }
 
-fn generateBuildFiles(allocator: std.mem.Allocator, project_name: []const u8, target_path: []const u8, platform_path: ?[]const u8) !void {
+fn generateBuildFiles(allocator: std.mem.Allocator, project_name: []const u8, target_path: []const u8) !void {
     printInfo("Generating build files...", .{});
 
     var dir = try std.fs.openDirAbsolute(target_path, .{});
     defer dir.close();
 
     try writeBuildZig(allocator, dir, project_name);
-    try writeBuildZigZon(allocator, dir, project_name, platform_path, target_path);
+    try writeBuildZigZon(allocator, dir, project_name);
 
     // Create src/ directory and write src/main.zig.
     dir.makeDir("src") catch |err| switch (err) {
@@ -482,53 +460,6 @@ fn fixFingerprint(allocator: std.mem.Allocator, target_path: []const u8) !void {
         // Either way, continue and let the user discover any build errors themselves.
         printInfo("  Warning: could not detect fingerprint suggestion from zig build output.", .{});
     }
-}
-
-/// Compute a relative path from `from_dir` to `to_path`. Both must be absolute.
-/// E.g., from="/tmp/myapp" to="/home/user/platform" → "../../home/user/platform"
-fn computeRelativePath(allocator: std.mem.Allocator, from_dir: []const u8, to_path: []const u8) ![]u8 {
-    // Split both paths by separator and find the common prefix.
-    var from_parts: std.ArrayList([]const u8) = .empty;
-    defer from_parts.deinit(allocator);
-    var to_parts: std.ArrayList([]const u8) = .empty;
-    defer to_parts.deinit(allocator);
-
-    var from_iter = std.mem.splitScalar(u8, from_dir, '/');
-    while (from_iter.next()) |part| {
-        if (part.len > 0) try from_parts.append(allocator, part);
-    }
-    var to_iter = std.mem.splitScalar(u8, to_path, '/');
-    while (to_iter.next()) |part| {
-        if (part.len > 0) try to_parts.append(allocator, part);
-    }
-
-    // Find common prefix length.
-    const min_len = @min(from_parts.items.len, to_parts.items.len);
-    var common: usize = 0;
-    while (common < min_len and std.mem.eql(u8, from_parts.items[common], to_parts.items[common])) {
-        common += 1;
-    }
-
-    // Build relative path: go up for each remaining from_part, then down for each remaining to_part.
-    var result: std.ArrayList(u8) = .empty;
-    defer result.deinit(allocator);
-
-    const ups = from_parts.items.len - common;
-    for (0..ups) |i| {
-        if (i > 0) try result.append(allocator, '/');
-        try result.appendSlice(allocator, "..");
-    }
-
-    for (to_parts.items[common..]) |part| {
-        if (result.items.len > 0) try result.append(allocator, '/');
-        try result.appendSlice(allocator, part);
-    }
-
-    if (result.items.len == 0) {
-        return try allocator.dupe(u8, ".");
-    }
-
-    return try allocator.dupe(u8, result.items);
 }
 
 /// Simple string replacement (single occurrence). Like substitutePlaceholder but
@@ -671,9 +602,9 @@ fn writeBuildZig(allocator: std.mem.Allocator, dir: std.fs.Dir, project_name: []
 
 /// Generate the project's build.zig.zon.
 ///
-/// When platform_path is set, uses a `.path` dependency for local development.
-/// Otherwise, uses a `.url` + `.hash` placeholder that `zig fetch --save` will replace.
-fn writeBuildZigZon(allocator: std.mem.Allocator, dir: std.fs.Dir, project_name: []const u8, platform_path: ?[]const u8, target_dir_path: []const u8) !void {
+/// Uses a `.url` + `.hash` placeholder that `zig fetch --save` will replace
+/// with the correct hash for the current master revision.
+fn writeBuildZigZon(allocator: std.mem.Allocator, dir: std.fs.Dir, project_name: []const u8) !void {
     var buf: std.ArrayList(u8) = .empty;
     defer buf.deinit(allocator);
 
@@ -692,24 +623,8 @@ fn writeBuildZigZon(allocator: std.mem.Allocator, dir: std.fs.Dir, project_name:
         \\
         \\    .dependencies = .{
         \\        .zig_webgpu_platform = .{
-        \\
-    );
-
-    if (platform_path) |pp| {
-        // Zig requires relative paths in build.zig.zon. Compute the relative
-        // path from the project directory to the platform source.
-        const rel_path = try computeRelativePath(allocator, target_dir_path, pp);
-        defer allocator.free(rel_path);
-        try buf.print(allocator, "            .path = \"{s}\",\n", .{rel_path});
-    } else {
-        try buf.appendSlice(allocator,
-            \\            .url = "git+https://github.com/ttrei-org/zig-webgpu-platform.git#master",
-            \\            .hash = "placeholder_run_zig_fetch_save",
-            \\
-        );
-    }
-
-    try buf.appendSlice(allocator,
+        \\            .url = "git+https://github.com/ttrei-org/zig-webgpu-platform.git#master",
+        \\            .hash = "placeholder_run_zig_fetch_save",
         \\        },
         \\    },
         \\}
@@ -900,7 +815,7 @@ fn writeMainZig(allocator: std.mem.Allocator, dir: std.fs.Dir, project_name: []c
 /// Initialize a git repository, add playwright-cli submodule, run zig fetch,
 /// and create an initial commit. Git is optional (a warning is printed if
 /// missing), but zig is required for the fetch step.
-fn initGitRepo(allocator: std.mem.Allocator, project_name: []const u8, target_path: []const u8, platform_path: ?[]const u8) void {
+fn initGitRepo(allocator: std.mem.Allocator, project_name: []const u8, target_path: []const u8) void {
     // Step 1: git init
     printInfo("Initializing git repository...", .{});
     const git_available = runCommand(allocator, target_path, &.{ "git", "init" });
@@ -919,23 +834,19 @@ fn initGitRepo(allocator: std.mem.Allocator, project_name: []const u8, target_pa
         }
     }
 
-    // Step 3: zig fetch --save (only when using remote URL, not local path)
-    if (platform_path == null) {
-        printInfo("Fetching zig-webgpu-platform dependency (this may take a moment)...", .{});
-        // Use --save=zig_webgpu_platform to force the dependency name, because
-        // the platform's build.zig.zon package name (zig_gui_experiment) differs
-        // from our dependency key (zig_webgpu_platform). Without the explicit
-        // name, zig fetch creates a second entry under the package's own name.
-        const zig_ok = runCommand(allocator, target_path, &.{
-            "zig",                                                             "fetch", "--save=zig_webgpu_platform",
-            "git+https://github.com/ttrei-org/zig-webgpu-platform.git#master",
-        });
-        if (!zig_ok) {
-            printError("'zig fetch --save' failed. Ensure zig is installed and you have access to the repository.", .{});
-            std.process.exit(1);
-        }
-    } else {
-        printInfo("Using local platform path — skipping zig fetch.", .{});
+    // Step 3: zig fetch --save
+    printInfo("Fetching zig-webgpu-platform dependency (this may take a moment)...", .{});
+    // Use --save=zig_webgpu_platform to force the dependency name, because
+    // the platform's build.zig.zon package name (zig_gui_experiment) differs
+    // from our dependency key (zig_webgpu_platform). Without the explicit
+    // name, zig fetch creates a second entry under the package's own name.
+    const zig_ok = runCommand(allocator, target_path, &.{
+        "zig",                                                             "fetch", "--save=zig_webgpu_platform",
+        "git+https://github.com/ttrei-org/zig-webgpu-platform.git#master",
+    });
+    if (!zig_ok) {
+        printError("'zig fetch --save' failed. Ensure zig is installed and you have access to the repository.", .{});
+        std.process.exit(1);
     }
 
     // Step 4: git add -A && git commit
