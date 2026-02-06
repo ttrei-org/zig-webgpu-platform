@@ -1028,12 +1028,10 @@ pub const Renderer = struct {
         log.debug("triangle drawn", .{});
     }
 
-    /// Flush all queued triangle draw commands as batched draw calls.
-    /// Uploads triangle vertices to the GPU buffer in chunks that fit within
-    /// the vertex buffer capacity, issuing one draw call per chunk. When all
-    /// triangles fit in a single batch (the common case), this is exactly one
-    /// draw call. For large scenes exceeding the 10,000-vertex buffer, multiple
-    /// draw calls are issued automatically — no triangles are ever dropped.
+    /// Flush all queued triangle draw commands as a single draw call.
+    /// Flattens all queued triangles into one vertex array, uploads to the GPU
+    /// buffer, and issues one draw call. If the total vertex count exceeds
+    /// the current buffer capacity, the GPU buffer is reallocated to fit.
     ///
     /// Must be called while a render pass is active (before endRenderPass).
     ///
@@ -1043,64 +1041,74 @@ pub const Renderer = struct {
         const commands = self.command_buffer.items;
         if (commands.len == 0) return;
 
-        // Set pipeline and bind group once — shared across all draw calls
+        const total_triangles: u32 = @intCast(commands.len);
+        const total_vertices: u32 = total_triangles * 3;
+
+        // Grow the GPU vertex buffer if needed
+        if (total_vertices > self.vertex_buffer_capacity) {
+            self.growVertexBuffer(total_vertices);
+        }
+
+        // Flatten all triangles into a CPU-side vertex array
+        const vertex_data = self.allocator.alloc(Vertex, total_vertices) catch |err| {
+            log.err("failed to allocate vertex staging buffer: {}", .{err});
+            return;
+        };
+        defer self.allocator.free(vertex_data);
+
+        for (commands, 0..) |cmd, idx| {
+            switch (cmd) {
+                .triangle => |triangle| {
+                    const tri_vertices = triangle.toVertices();
+                    const base_idx = idx * 3;
+                    vertex_data[base_idx + 0] = tri_vertices[0];
+                    vertex_data[base_idx + 1] = tri_vertices[1];
+                    vertex_data[base_idx + 2] = tri_vertices[2];
+                },
+            }
+        }
+
+        // Single writeBuffer + single draw call — no multi-batch race condition
+        self.queue.writeBuffer(self.vertex_buffer, 0, Vertex, vertex_data);
+
         render_pass.setPipeline(self.render_pipeline);
         render_pass.setBindGroup(0, self.bind_group, &.{});
 
-        const max_triangles_per_batch = self.vertex_buffer_capacity / 3;
-        var commands_processed: u32 = 0;
-        var draw_call_count: u32 = 0;
-        var total_vertices_drawn: u32 = 0;
+        const vertex_buffer_size: u64 = @as(u64, total_vertices) * @sizeOf(Vertex);
+        render_pass.setVertexBuffer(0, self.vertex_buffer, 0, vertex_buffer_size);
+        render_pass.draw(total_vertices, 1, 0, 0);
 
-        // Process commands in chunks that fit the vertex buffer
-        while (commands_processed < commands.len) {
-            var vertices: [max_vertex_capacity]Vertex = undefined;
-            var batch_triangles: u32 = 0;
+        log.debug("batched draw: {} vertices ({} triangles)", .{ total_vertices, total_triangles });
+    }
 
-            // Fill the vertex array up to buffer capacity
-            var i = commands_processed;
-            while (i < commands.len and batch_triangles < max_triangles_per_batch) {
-                switch (commands[i]) {
-                    .triangle => |triangle| {
-                        const tri_vertices = triangle.toVertices();
-                        const base_idx = batch_triangles * 3;
-                        vertices[base_idx + 0] = tri_vertices[0];
-                        vertices[base_idx + 1] = tri_vertices[1];
-                        vertices[base_idx + 2] = tri_vertices[2];
-                        batch_triangles += 1;
-                    },
-                }
-                i += 1;
-            }
+    /// Grow the GPU vertex buffer to hold at least `required_vertices`.
+    /// Releases the old buffer and creates a new one with 1.5x headroom
+    /// to reduce future reallocations.
+    fn growVertexBuffer(self: *Self, required_vertices: u32) void {
+        // 1.5x headroom to avoid frequent reallocations
+        const new_capacity = required_vertices + required_vertices / 2;
+        const buffer_size: u64 = @as(u64, new_capacity) * @sizeOf(Vertex);
 
-            commands_processed = @intCast(i);
+        const new_buffer = self.device.createBuffer(.{
+            .next_in_chain = null,
+            .label = "Dynamic Vertex Buffer",
+            .usage = .{ .vertex = true, .copy_dst = true },
+            .size = buffer_size,
+            .mapped_at_creation = .false,
+        });
 
-            if (batch_triangles == 0) break;
-
-            const vertex_count = batch_triangles * 3;
-
-            // Upload this chunk to the GPU vertex buffer
-            const vertex_slice = vertices[0..vertex_count];
-            self.queue.writeBuffer(self.vertex_buffer, 0, Vertex, vertex_slice);
-
-            // Bind vertex buffer and draw
-            const vertex_buffer_size: u64 = @as(u64, vertex_count) * @sizeOf(Vertex);
-            render_pass.setVertexBuffer(0, self.vertex_buffer, 0, vertex_buffer_size);
-            render_pass.draw(vertex_count, 1, 0, 0);
-
-            draw_call_count += 1;
-            total_vertices_drawn += vertex_count;
+        if (@intFromPtr(new_buffer) == 0) {
+            log.err("vertex buffer reallocation failed (requested {} bytes)", .{buffer_size});
+            return;
         }
 
-        if (draw_call_count > 1) {
-            log.info("batched draw: {} vertices ({} triangles) across {} draw calls", .{
-                total_vertices_drawn,
-                total_vertices_drawn / 3,
-                draw_call_count,
-            });
-        } else {
-            log.debug("batched draw: {} vertices ({} triangles)", .{ total_vertices_drawn, total_vertices_drawn / 3 });
-        }
+        log.info("vertex buffer grown: {} -> {} vertices ({} bytes)", .{
+            self.vertex_buffer_capacity, new_capacity, buffer_size,
+        });
+
+        self.vertex_buffer.release();
+        self.vertex_buffer = new_buffer;
+        self.vertex_buffer_capacity = new_capacity;
     }
 
     /// End the current frame and present it to the screen.
