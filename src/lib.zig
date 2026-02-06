@@ -87,6 +87,56 @@ pub const DEFAULT_VIEWPORT: Viewport = .{ .logical_width = 400.0, .logical_heigh
 /// large jumps in game state (e.g., when window is dragged or minimized).
 const MAX_DELTA_TIME: f32 = 0.25; // 4 FPS minimum
 
+/// A computed rectangle within the framebuffer where the viewport content
+/// should be rendered, preserving the logical viewport's aspect ratio.
+/// When the framebuffer aspect ratio differs from the viewport's, the
+/// content is centered with letterbox (top/bottom) or pillarbox (left/right) bars.
+const LetterboxRect = struct {
+    x: f32,
+    y: f32,
+    width: f32,
+    height: f32,
+};
+
+/// Compute the largest rectangle within the framebuffer that preserves the
+/// viewport's aspect ratio, centered within the framebuffer.
+///
+/// Returns a LetterboxRect describing the position and size of the active
+/// rendering area. The caller passes this to `render_pass.setViewport()` to
+/// constrain rendering; the clear color fills the bars automatically.
+fn computeLetterboxViewport(fb_width: u32, fb_height: u32, viewport: Viewport) LetterboxRect {
+    const fb_w: f32 = @floatFromInt(fb_width);
+    const fb_h: f32 = @floatFromInt(fb_height);
+
+    // Guard against degenerate framebuffer (e.g., minimized window)
+    if (fb_w <= 0 or fb_h <= 0) return .{ .x = 0, .y = 0, .width = fb_w, .height = fb_h };
+
+    const fb_aspect = fb_w / fb_h;
+    const vp_aspect = viewport.logical_width / viewport.logical_height;
+
+    if (fb_aspect > vp_aspect) {
+        // Framebuffer is wider than viewport → pillarbox (bars on left/right)
+        const height = fb_h;
+        const width = fb_h * vp_aspect;
+        return .{
+            .x = (fb_w - width) / 2.0,
+            .y = 0,
+            .width = width,
+            .height = height,
+        };
+    } else {
+        // Framebuffer is taller than viewport → letterbox (bars on top/bottom)
+        const width = fb_w;
+        const height = fb_w / vp_aspect;
+        return .{
+            .x = 0,
+            .y = (fb_h - height) / 2.0,
+            .width = width,
+            .height = height,
+        };
+    }
+}
+
 /// Configuration options for the platform runner.
 pub const RunOptions = struct {
     /// Logical viewport dimensions for drawing.
@@ -113,6 +163,8 @@ pub const RunOptions = struct {
 };
 
 /// Convert mouse coordinates from physical window/canvas space to logical viewport space.
+/// Accounts for letterbox/pillarbox offsets so clicks in the bars are clamped to
+/// the viewport edges and coordinates within the active area map correctly.
 fn toLogicalCoordinates(mouse: MouseState, window_size: platform_mod.Size, viewport: Viewport) MouseState {
     const win_w: f32 = @floatFromInt(window_size.width);
     const win_h: f32 = @floatFromInt(window_size.height);
@@ -120,9 +172,19 @@ fn toLogicalCoordinates(mouse: MouseState, window_size: platform_mod.Size, viewp
     // Guard against division by zero (minimized window or uninitialized state)
     if (win_w <= 0 or win_h <= 0) return mouse;
 
+    const letterbox = computeLetterboxViewport(window_size.width, window_size.height, viewport);
+
+    // Guard against zero-size letterbox (degenerate state)
+    if (letterbox.width <= 0 or letterbox.height <= 0) return mouse;
+
     var result = mouse;
-    result.x = mouse.x * (viewport.logical_width / win_w);
-    result.y = mouse.y * (viewport.logical_height / win_h);
+    // Map from window pixel coords to logical coords via the letterbox rect
+    result.x = (mouse.x - letterbox.x) * (viewport.logical_width / letterbox.width);
+    result.y = (mouse.y - letterbox.y) * (viewport.logical_height / letterbox.height);
+
+    // Clamp to viewport bounds — clicks in the letterbox bars map to edges
+    result.x = @max(0, @min(result.x, viewport.logical_width));
+    result.y = @max(0, @min(result.y, viewport.logical_height));
     return result;
 }
 
@@ -581,6 +643,14 @@ fn runFrame(
     renderer.setLogicalSize(viewport.logical_width, viewport.logical_height);
 
     const render_pass = Renderer.beginRenderPass(frame_state, Renderer.cornflower_blue);
+
+    // Constrain rendering to a centered rectangle that preserves the viewport's
+    // aspect ratio. The clear color fills the entire framebuffer (including bars),
+    // while setViewport limits where geometry is actually drawn.
+    const dimensions = render_target.getDimensions();
+    const letterbox = computeLetterboxViewport(dimensions.width, dimensions.height, viewport);
+    render_pass.setViewport(letterbox.x, letterbox.y, letterbox.width, letterbox.height, 0.0, 1.0);
+
     var canvas = Canvas.init(renderer, viewport);
     app.render(&canvas);
     renderer.flushBatch(render_pass);
@@ -671,8 +741,74 @@ test "toLogicalCoordinates scales correctly" {
     const viewport: Viewport = .{ .logical_width = 400.0, .logical_height = 300.0 };
 
     const result = toLogicalCoordinates(mouse, window_size, viewport);
+    // Same aspect ratio (4:3) → no letterbox, full window used
     // 400 * (400/800) = 200
     try std.testing.expectEqual(@as(f32, 200.0), result.x);
     // 300 * (300/600) = 150
     try std.testing.expectEqual(@as(f32, 150.0), result.y);
+}
+
+test "computeLetterboxViewport same aspect ratio" {
+    const viewport: Viewport = .{ .logical_width = 400.0, .logical_height = 300.0 };
+    const rect = computeLetterboxViewport(800, 600, viewport);
+    // 4:3 window with 4:3 viewport → no bars
+    try std.testing.expectEqual(@as(f32, 0.0), rect.x);
+    try std.testing.expectEqual(@as(f32, 0.0), rect.y);
+    try std.testing.expectEqual(@as(f32, 800.0), rect.width);
+    try std.testing.expectEqual(@as(f32, 600.0), rect.height);
+}
+
+test "computeLetterboxViewport wider window (pillarbox)" {
+    const viewport: Viewport = .{ .logical_width = 400.0, .logical_height = 300.0 };
+    // 1200x600 = 2:1 aspect, viewport is 4:3 → pillarbox
+    const rect = computeLetterboxViewport(1200, 600, viewport);
+    // height = 600, width = 600 * (4/3) = 800
+    try std.testing.expectEqual(@as(f32, 800.0), rect.width);
+    try std.testing.expectEqual(@as(f32, 600.0), rect.height);
+    // centered: x = (1200 - 800) / 2 = 200
+    try std.testing.expectEqual(@as(f32, 200.0), rect.x);
+    try std.testing.expectEqual(@as(f32, 0.0), rect.y);
+}
+
+test "computeLetterboxViewport taller window (letterbox)" {
+    const viewport: Viewport = .{ .logical_width = 400.0, .logical_height = 300.0 };
+    // 800x800 = 1:1 aspect, viewport is 4:3 → letterbox
+    const rect = computeLetterboxViewport(800, 800, viewport);
+    // width = 800, height = 800 / (4/3) = 600
+    try std.testing.expectEqual(@as(f32, 800.0), rect.width);
+    try std.testing.expectEqual(@as(f32, 600.0), rect.height);
+    // centered: y = (800 - 600) / 2 = 100
+    try std.testing.expectEqual(@as(f32, 0.0), rect.x);
+    try std.testing.expectEqual(@as(f32, 100.0), rect.y);
+}
+
+test "toLogicalCoordinates with pillarbox clamps to viewport edges" {
+    // 1200x600 window, 4:3 viewport → pillarbox bars at x=0..200 and x=1000..1200
+    const viewport: Viewport = .{ .logical_width = 400.0, .logical_height = 300.0 };
+    const window_size: platform_mod.Size = .{ .width = 1200, .height = 600 };
+
+    // Click in left pillarbox bar (x=100, within bar region 0..200)
+    const left_bar: MouseState = .{
+        .x = 100.0,
+        .y = 300.0,
+        .left_pressed = true,
+        .right_pressed = false,
+        .middle_pressed = false,
+    };
+    const result_left = toLogicalCoordinates(left_bar, window_size, viewport);
+    // x maps to (100 - 200) * (400/800) = -50 → clamped to 0
+    try std.testing.expectEqual(@as(f32, 0.0), result_left.x);
+
+    // Click in center of active area (x=600, y=300)
+    const center: MouseState = .{
+        .x = 600.0,
+        .y = 300.0,
+        .left_pressed = false,
+        .right_pressed = false,
+        .middle_pressed = false,
+    };
+    const result_center = toLogicalCoordinates(center, window_size, viewport);
+    // x maps to (600 - 200) * (400/800) = 200 (center of viewport)
+    try std.testing.expectEqual(@as(f32, 200.0), result_center.x);
+    try std.testing.expectEqual(@as(f32, 150.0), result_center.y);
 }

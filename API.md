@@ -309,7 +309,7 @@ pub const Canvas = struct {
 - Y axis: increases downward
 - Units: logical pixels (not physical), as defined by Viewport
 
-All drawing is resolution-independent. The GPU automatically scales logical coordinates to the physical render target.
+All drawing is resolution-independent. The GPU automatically scales logical coordinates to the physical render target. When the window/canvas aspect ratio differs from the viewport's, the platform applies letterboxing (bars on top/bottom) or pillarboxing (bars on sides) to preserve the viewport's aspect ratio. The clear color fills the bars; no application code is needed.
 
 ---
 
@@ -581,6 +581,8 @@ pub const MouseState = struct {
 };
 ```
 
+**Coordinate mapping:** Mouse coordinates are automatically mapped from physical window/canvas pixels to logical viewport space, accounting for letterbox/pillarbox offsets. Clicks in the letterbox bars are clamped to `[0, viewport_width]` × `[0, viewport_height]`.
+
 **Edge detection helpers:**
 - `buttonJustPressed`: Returns `true` on the frame a button transitions from released to pressed
 - `buttonJustReleased`: Returns `true` on the frame a button transitions from pressed to released
@@ -742,6 +744,8 @@ pub fn main() void {
 ## RunOptions
 
 Configuration for `platform.run()`. On native, it creates a GLFW window, initializes Dawn WebGPU, and runs the render loop. On WASM, it creates a WebPlatform, initializes the WebGPU renderer, sets up the swap chain, and starts the emscripten main loop. The same `RunOptions` struct is used on both targets.
+
+**Aspect ratio handling:** If the window/canvas aspect ratio differs from the viewport's (e.g., viewport is 4:3 but window is 16:9), the platform preserves the viewport's aspect ratio by rendering into a centered, uniformly-scaled sub-rectangle. Letterbox bars (top/bottom) or pillarbox bars (left/right) are filled with the clear color. Mouse coordinates are mapped through this letterbox rectangle automatically.
 
 ```zig
 pub const RunOptions = struct {

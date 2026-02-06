@@ -1409,6 +1409,13 @@ const webgpuStubs = {
         }
     },
 
+    wgpuRenderPassEncoderSetViewport: (passHandle, x, y, width, height, minDepth, maxDepth) => {
+        const passObj = getHandle(passHandle);
+        if (passObj && passObj.pass) {
+            passObj.pass.setViewport(x, y, width, height, minDepth, maxDepth);
+        }
+    },
+
     wgpuRenderPassEncoderEnd: (passHandle) => {
         const passObj = getHandle(passHandle);
         if (passObj && passObj.pass) {

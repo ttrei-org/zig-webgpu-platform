@@ -162,7 +162,7 @@ The `Platform` struct uses a function-pointer vtable for runtime polymorphism ac
 The `runFrame()` function is the single source of truth for the per-frame pipeline:
 
 ```
-beginFrame → setLogicalSize → beginRenderPass → app.render(canvas) → flushBatch → endRenderPass → [pre-submit hook] → endFrame
+beginFrame → setLogicalSize → beginRenderPass → setViewport(letterbox) → app.render(canvas) → flushBatch → endRenderPass → [pre-submit hook] → endFrame
 ```
 
 Three entry paths call `runFrame` (all inside `lib.zig`):
@@ -206,10 +206,14 @@ Vertex shader reads:      uniform screen_size = (400.0, 300.0) ← setLogicalSiz
                           ndc_y = 1.0 - (150.0 / 300.0) * 2.0 = 0.0
         │
         ▼
-Rasterizer maps:          NDC → physical framebuffer pixels (automatic)
+setViewport constrains:   NDC → letterboxed sub-rectangle of framebuffer
+                          (preserves viewport aspect ratio via computeLetterboxViewport)
+        │
+        ▼
+Rasterizer maps:          NDC → physical pixels within the viewport rectangle
 ```
 
-The key insight: `setLogicalSize` sends the *logical* viewport dimensions (not physical pixel dimensions) to the shader uniform. This means the shader maps logical coordinates to NDC, and the GPU's viewport transform handles the final stretch to physical pixels. Applications never know about physical resolution.
+The key insight: `setLogicalSize` sends the *logical* viewport dimensions (not physical pixel dimensions) to the shader uniform. This means the shader maps logical coordinates to NDC, and `setViewport` handles the NDC-to-framebuffer mapping within a centered, aspect-ratio-preserving rectangle. The clear color fills the entire framebuffer (including letterbox/pillarbox bars), while `setViewport` constrains where geometry is drawn. Applications never know about physical resolution or letterboxing.
 
 ### 3.3 Input Pipeline
 
@@ -220,7 +224,7 @@ OS/Browser Event → Platform Backend → MouseState / Key poll → App.update()
                                                          (just-pressed detection)
 ```
 
-Mouse coordinates from the platform are in logical viewport space (the web backend does CSS→canvas coordinate conversion; the desktop backend provides raw pixel coords which currently map 1:1 to logical if the window matches the viewport).
+Mouse coordinates from the platform are in physical window/canvas space. The frame orchestrator maps them to logical viewport space via `toLogicalCoordinates()`, which accounts for letterbox/pillarbox offsets when the window aspect ratio differs from the viewport's. Clicks in the letterbox bars are clamped to the nearest viewport edge.
 
 ---
 
@@ -425,7 +429,7 @@ zig build -Dtarget=wasm32-emscripten      # in /tmp/test-scaffold-project
 
 | File | Lines | Role | Layer |
 |---|---|---|---|
-| `src/lib.zig` | ~660 | **Library entry point** - exports public API + run() (native + WASM) | **Public API** |
+| `src/lib.zig` | ~815 | **Library entry point** - exports public API + run() (native + WASM) | **Public API** |
 | `src/canvas.zig` | ~450 | Shape drawing API | **Public API** |
 | `src/color.zig` | ~110 | Color type | **Public API** |
 | `src/app_interface.zig` | ~150 | Application interface (vtable) | **Public API** |
