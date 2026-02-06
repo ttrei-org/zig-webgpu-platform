@@ -1,5 +1,5 @@
 #!/bin/bash
-# Web Screenshot Script for zig-gui-experiment
+# Web Screenshot Script for zig-webgpu-platform
 #
 # Captures a screenshot of the web build using Playwright with Firefox
 # and xvfb. Firefox with WebGPU prefs enabled works without GPU hardware,
@@ -25,7 +25,7 @@ OUTPUT_PATH="${1:-/tmp/web_screenshot.png}"
 WAIT_SECS="${2:-5}"
 
 # Ensure web build exists
-if [ ! -f "$PROJECT_DIR/zig-out/bin/zig_gui_experiment.wasm" ]; then
+if [ ! -f "$PROJECT_DIR/zig-out/bin/zig_webgpu_platform.wasm" ]; then
     echo "Building web target..."
     cd "$PROJECT_DIR"
     zig build -Dtarget=wasm32-emscripten

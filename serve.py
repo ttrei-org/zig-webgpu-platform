@@ -87,7 +87,7 @@ def generate_cert():
             "365",
             "-nodes",
             "-subj",
-            "/CN=zig-gui-experiment-dev",
+            "/CN=zig-webgpu-platform-dev",
             "-addext",
             f"subjectAltName={san}",
         ],

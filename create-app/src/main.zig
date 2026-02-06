@@ -837,9 +837,9 @@ fn initGitRepo(allocator: std.mem.Allocator, project_name: []const u8, target_pa
     // Step 3: zig fetch --save
     printInfo("Fetching zig-webgpu-platform dependency (this may take a moment)...", .{});
     // Use --save=zig_webgpu_platform to force the dependency name, because
-    // the platform's build.zig.zon package name (zig_gui_experiment) differs
-    // from our dependency key (zig_webgpu_platform). Without the explicit
-    // name, zig fetch creates a second entry under the package's own name.
+    // Explicitly set the dependency name to zig_webgpu_platform to match
+    // what the generated build.zig expects. Without the explicit name,
+    // zig fetch would use the package's own name from build.zig.zon.
     const zig_ok = runCommand(allocator, target_path, &.{
         "zig",                                                             "fetch", "--save=zig_webgpu_platform",
         "git+https://github.com/ttrei-org/zig-webgpu-platform.git#master",

@@ -1,7 +1,7 @@
 // Triangle shader for basic WebGPU rendering
 //
 // This shader handles vertex transformation and fragment coloring for triangles.
-// It is designed to work with the Renderer module in the zig-gui-experiment project.
+// It is designed to work with the Renderer module in the zig-webgpu-platform project.
 //
 // The shader expects vertices with position in screen coordinates (pixels) and
 // color attributes. The vertex shader transforms screen coordinates to NDC using

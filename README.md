@@ -1,6 +1,6 @@
-# Zig GUI Experiment
+# Zig WebGPU Platform
 
-A cross-platform GUI rendering experiment using Zig and WebGPU.
+A cross-platform 2D graphics platform using Zig and WebGPU.
 
 ## Building
 
@@ -20,8 +20,8 @@ zig build -Dtarget=wasm32-emscripten
 No additional dependencies are needed — the Emscripten SDK is **not** required. The project uses custom Zig bindings and a hand-written JavaScript runtime (`web/wasm_bindings.js`) instead of `emcc` or `std.os.emscripten`.
 
 This produces output in `zig-out/web/` including:
-- `bin/zig_gui_experiment.wasm` - The compiled WebAssembly module
-- `zig_gui_experiment.js` - JavaScript glue code
+- `bin/zig_webgpu_platform.wasm` - The compiled WebAssembly module
+- `zig_webgpu_platform.js` - JavaScript glue code
 - `index.html` - Web page that loads and runs the WASM
 
 ## Running the Web Build

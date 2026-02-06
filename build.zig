@@ -158,7 +158,7 @@ pub fn build(b: *std.Build) void {
     }
 
     const exe = b.addExecutable(.{
-        .name = "zig_gui_experiment",
+        .name = "zig_webgpu_platform",
         .root_module = root_module,
     });
 
@@ -276,13 +276,13 @@ pub fn build(b: *std.Build) void {
         // Create JavaScript loader file that instantiates the WASM module
         // This provides Emscripten runtime stubs and WebGPU integration
         const js_glue = b.addWriteFiles();
-        _ = js_glue.add("zig_gui_experiment.js", @embedFile("web/wasm_bindings.js"));
+        _ = js_glue.add("zig_webgpu_platform.js", @embedFile("web/wasm_bindings.js"));
 
         // Install the JS glue file to the web output directory
         b.getInstallStep().dependOn(&b.addInstallFileWithDir(
-            js_glue.getDirectory().path(b, "zig_gui_experiment.js"),
+            js_glue.getDirectory().path(b, "zig_webgpu_platform.js"),
             .{ .custom = "." },
-            "zig_gui_experiment.js",
+            "zig_webgpu_platform.js",
         ).step);
 
         // Copy index.html from web/ to the web output directory

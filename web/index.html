@@ -3,8 +3,8 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <meta name="description" content="Zig GUI Experiment - WebGPU Rendering">
-    <title>Zig GUI Experiment</title>
+    <meta name="description" content="Zig WebGPU Platform - WebGPU Rendering">
+    <title>Zig WebGPU Platform</title>
     <style>
         * {
             margin: 0;
@@ -122,12 +122,12 @@
     </script>
 
     <!-- Load the Emscripten-generated JavaScript module -->
-    <script type="module" src="./zig_gui_experiment.js"></script>
+    <script type="module" src="./zig_webgpu_platform.js"></script>
     <script type="module">
-        // Zig GUI Experiment - WebGPU WASM Loader
+        // Zig WebGPU Platform - WebGPU WASM Loader
         // This script imports the generated JS module and initializes the application.
 
-        import { init } from "./zig_gui_experiment.js";
+        import { init } from "./zig_webgpu_platform.js";
 
         async function main() {
             // Check for WebGPU support before anything else

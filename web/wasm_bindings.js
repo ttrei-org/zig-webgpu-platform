@@ -1,4 +1,4 @@
-// WebGPU WASM Bindings for zig_gui_experiment
+// WebGPU WASM Bindings for zig_webgpu_platform
 // This module provides Emscripten runtime stubs and complete WebGPU bindings
 // that bridge WASM wgpu* calls to the browser's WebGPU API.
 
@@ -1501,7 +1501,7 @@ export async function init(wasmPath) {
     dbg("WebGPU initialized");
 
     // Fetch and instantiate WASM
-    const response = await fetch(wasmPath || "bin/zig_gui_experiment.wasm");
+    const response = await fetch(wasmPath || "bin/zig_webgpu_platform.wasm");
     const wasmBytes = await response.arrayBuffer();
 
     const importObject = {
