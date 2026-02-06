@@ -6,7 +6,7 @@
 # unlike Chromium which requires a real GPU for WebGPU.
 #
 # Usage:
-#   ./scripts/web_screenshot.sh [output_path]
+#   ./scripts/web_screenshot.sh [output_path] [wait_seconds]
 #
 # Requirements:
 #   - playwright-cli installed
@@ -31,8 +31,9 @@ if [ ! -f "$PROJECT_DIR/zig-out/bin/zig_webgpu_platform.wasm" ]; then
     zig build -Dtarget=wasm32-emscripten
 fi
 
-# Create Playwright config for Firefox with WebGPU enabled
-CONFIG_FILE=$(mktemp /tmp/playwright-webgpu-XXXXXX.json)
+# Create playwright-cli config for Firefox with WebGPU enabled
+CONFIG_DIR=$(mktemp -d /tmp/playwright-webgpu-XXXXXX)
+CONFIG_FILE="$CONFIG_DIR/cli.config.json"
 cat > "$CONFIG_FILE" << 'EOF'
 {
   "browser": {
@@ -53,22 +54,22 @@ python serve.py > /dev/null 2>&1 &
 SERVER_PID=$!
 sleep 2
 
-# Ensure server is stopped on exit
+# Ensure server and sessions are stopped on exit
 cleanup() {
     kill $SERVER_PID 2>/dev/null || true
-    rm -f "$CONFIG_FILE"
+    rm -rf "$CONFIG_DIR"
+    playwright-cli close-all 2>/dev/null || true
 }
 trap cleanup EXIT
 
 # Take screenshot using xvfb + Firefox with WebGPU
 echo "Taking web screenshot (Firefox + xvfb)..."
 xvfb-run --auto-servernum bash << SCRIPT
-playwright-cli session-stop 2>/dev/null || true
-playwright-cli config --config="$CONFIG_FILE"
-playwright-cli open "http://localhost:8000/"
+playwright-cli close-all 2>/dev/null || true
+playwright-cli open --browser firefox --config="$CONFIG_FILE" "http://localhost:8000/"
 sleep $WAIT_SECS
 playwright-cli run-code 'async page => { await page.screenshot({ path: "$OUTPUT_PATH", type: "png" }); return "saved"; }'
-playwright-cli session-stop
+playwright-cli close-all 2>/dev/null || true
 SCRIPT
 
 echo "Screenshot saved to: $OUTPUT_PATH"

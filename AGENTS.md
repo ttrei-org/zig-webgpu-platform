@@ -54,9 +54,10 @@ zig build -Dtarget=wasm32-emscripten   # in /tmp/test-project
 
 ### Playwright session caching
 
-If web screenshots show stale content, delete the Playwright session cache before retaking:
+If web screenshots show stale content, close all browser sessions and delete data before retaking:
 ```bash
-playwright-cli session-delete
+playwright-cli close-all
+playwright-cli kill-all    # if close-all doesn't work (stale/zombie processes)
 ```
 
 ---

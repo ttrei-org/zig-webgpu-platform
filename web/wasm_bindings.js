@@ -1521,9 +1521,35 @@ export async function init(wasmPath) {
 
     dbg("WASM module loaded");
 
+    // Wire up mouse event listeners on the canvas.
+    // The Zig web platform exports web_update_mouse_position(x, y) and
+    // web_update_mouse_button(button, pressed) which update the platform's
+    // mouse state directly. We use offsetX/offsetY for canvas-relative CSS
+    // coordinates, then scale to backing-buffer pixels.
+    const exports = instance.exports;
+    if (canvasElement && exports.web_update_mouse_position && exports.web_update_mouse_button) {
+        canvasElement.addEventListener("mousemove", (e) => {
+            const scaleX = canvasElement.width / canvasElement.clientWidth;
+            const scaleY = canvasElement.height / canvasElement.clientHeight;
+            exports.web_update_mouse_position(e.offsetX * scaleX, e.offsetY * scaleY);
+        });
+
+        canvasElement.addEventListener("mousedown", (e) => {
+            exports.web_update_mouse_button(e.button, true);
+        });
+
+        canvasElement.addEventListener("mouseup", (e) => {
+            exports.web_update_mouse_button(e.button, false);
+        });
+
+        dbg("Mouse event listeners registered on canvas");
+    } else {
+        console.warn("Could not register mouse event listeners: missing canvas or WASM exports");
+    }
+
     return {
         instance,
-        exports: instance.exports,
+        exports: exports,
     };
 }
 
