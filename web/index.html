@@ -14,13 +14,23 @@
         html, body {
             width: 100%;
             height: 100%;
+            margin: 0;
             overflow: hidden;
             background: #1a1a2e;
+            display: flex;
+            justify-content: center;
+            align-items: center;
+        }
+        #canvas-container {
+            max-width: 100vw;
+            max-height: 100vh;
+            aspect-ratio: 4 / 3;
+            width: 100%;
         }
         #canvas {
             display: block;
-            width: 100vw;
-            height: 100vh;
+            width: 100%;
+            height: 100%;
         }
         .error-message {
             display: none;
@@ -65,7 +75,9 @@
     </style>
 </head>
 <body>
-    <canvas id="canvas" width="800" height="600"></canvas>
+    <div id="canvas-container">
+        <canvas id="canvas" width="800" height="600"></canvas>
+    </div>
     <div id="error" class="error-message"></div>
     <div id="debug-overlay"></div>
 
@@ -145,13 +157,15 @@
                 return;
             }
 
-            // Set canvas size to match window, accounting for device pixel ratio.
-            // After WASM init, also notifies the WASM side so the swap chain
-            // can be resized to match the new canvas dimensions.
+            // Set canvas backing store to match its CSS layout size, accounting
+            // for device pixel ratio.  The canvas is contained in a flex-centered
+            // div with aspect-ratio: 4/3, so getBoundingClientRect() gives us the
+            // actual CSS pixel dimensions after the browser has applied constraints.
             function resizeCanvas() {
                 const dpr = window.devicePixelRatio || 1;
-                canvas.width = Math.floor(window.innerWidth * dpr);
-                canvas.height = Math.floor(window.innerHeight * dpr);
+                const rect = canvas.getBoundingClientRect();
+                canvas.width = Math.floor(rect.width * dpr);
+                canvas.height = Math.floor(rect.height * dpr);
                 console.log("Canvas resized: " + canvas.width + "x" + canvas.height + " (dpr=" + dpr + ")");
 
                 // Propagate new size to WASM so the swap chain can be recreated

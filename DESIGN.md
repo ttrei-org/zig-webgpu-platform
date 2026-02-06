@@ -252,6 +252,8 @@ The web build is notable for **not requiring the Emscripten SDK**. Instead:
 
 Consumer projects get WASM support for free via `lib.run()` — all WebGPU initialization, swap chain creation, and emscripten main loop setup is handled internally. The HTML host page only needs to pass the correct WASM binary path (e.g. `bin/<name>.wasm`) to the JS `init()` function.
 
+**Canvas containment:** The HTML host page wraps `<canvas>` in a flex-centered `<div id="canvas-container">` with `aspect-ratio: 4/3`. This constrains the canvas to the viewport's aspect ratio and centers it on the page, with the dark page background (`#1a1a2e`) visible as letterbox/pillarbox bars when the browser window doesn't match. The `resizeCanvas()` function uses `getBoundingClientRect()` to derive the backing-store pixel dimensions from the CSS layout size. On desktop, the equivalent letterboxing is handled at the WebGPU `setViewport` level instead.
+
 ### 4.3 Headless Architecture
 
 Headless mode enables CI/automated testing without a display:
