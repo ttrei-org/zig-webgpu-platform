@@ -911,8 +911,8 @@ fn initGitRepo(allocator: std.mem.Allocator, project_name: []const u8, target_pa
         // Step 2: git submodule add playwright-cli
         printInfo("Adding playwright-cli submodule...", .{});
         const submodule_ok = runCommand(allocator, target_path, &.{
-            "git",                                                  "submodule",             "add",
-            "https://github.com/nicholasgasior/playwright-cli.git", "skills/playwright-cli",
+            "git",                                             "submodule",             "add",
+            "https://github.com/microsoft/playwright-cli.git", "skills/playwright-cli",
         });
         if (!submodule_ok) {
             printInfo("Warning: failed to add playwright-cli submodule. Continuing...", .{});
