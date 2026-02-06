@@ -223,8 +223,8 @@ fn isValidZigIdentifier(name: []const u8) bool {
 // Template fetching
 // ---------------------------------------------------------------------------
 
-/// Base URL for fetching template files from GitHub.
-const TEMPLATE_BASE_URL = "https://raw.githubusercontent.com/ttrei-org/zig-webgpu-platform/master/create-app/templates/";
+/// Git SSH URL for cloning the repository (works with private repos via SSH key).
+const REPO_GIT_URL = "git@github.com:ttrei-org/zig-webgpu-platform.git";
 
 /// Maximum response body size (1 MB) to prevent OOM from unexpected responses.
 const MAX_RESPONSE_SIZE = 1024 * 1024;
@@ -303,84 +303,55 @@ fn copyLocalTemplates(allocator: std.mem.Allocator, project_name: []const u8, ta
     }
 }
 
-/// Fetch all template files from GitHub, substitute placeholders, and write
-/// them into the project directory.
+/// Fetch all template files by cloning the repository via git SSH,
+/// then copying the template files from the clone. This works with
+/// private repos because it uses the user's SSH key for authentication.
 fn fetchTemplates(allocator: std.mem.Allocator, project_name: []const u8, target_path: []const u8) !void {
-    var client: std.http.Client = .{ .allocator = allocator };
-    defer client.deinit();
+    printInfo("Cloning template repository...", .{});
 
-    var dir = try std.fs.openDirAbsolute(target_path, .{});
-    defer dir.close();
+    // Create a temporary directory for the shallow clone.
+    const tmp_dir = "/tmp/zig-webgpu-create-app-clone";
 
-    for (&TEMPLATE_FILES) |*tmpl| {
-        try fetchOneTemplate(allocator, &client, dir, tmpl, project_name);
+    // Remove any leftover temp dir from a previous failed run.
+    std.fs.deleteTreeAbsolute(tmp_dir) catch {};
+
+    // Shallow-clone the repo with sparse checkout to minimize bandwidth.
+    if (!runCommand(allocator, "/tmp", &.{
+        "git", "clone", "--depth=1", "--filter=blob:none", "--sparse", REPO_GIT_URL, tmp_dir,
+    })) {
+        printError(
+            "failed to clone {s}\n" ++
+                "  Ensure git is installed and you have SSH access to the repository.\n" ++
+                "  Alternatively, use --templates-dir to provide templates from a local directory.",
+            .{REPO_GIT_URL},
+        );
+        std.process.exit(1);
     }
+
+    // Set sparse checkout to only fetch the templates directory.
+    if (!runCommand(allocator, tmp_dir, &.{
+        "git", "sparse-checkout", "set", "create-app/templates",
+    })) {
+        printError("failed to configure sparse checkout", .{});
+        cleanupTmpDir(tmp_dir);
+        std.process.exit(1);
+    }
+
+    // Now copy templates from the clone using the same logic as copyLocalTemplates.
+    const templates_path = tmp_dir ++ "/create-app/templates";
+    copyLocalTemplates(allocator, project_name, target_path, templates_path) catch |err| {
+        printError("failed to copy templates from clone: {s}", .{@errorName(err)});
+        cleanupTmpDir(tmp_dir);
+        return err;
+    };
+
+    cleanupTmpDir(tmp_dir);
 }
 
-/// Fetch a single template file, perform placeholder substitution, and write it.
-fn fetchOneTemplate(
-    allocator: std.mem.Allocator,
-    client: *std.http.Client,
-    dir: std.fs.Dir,
-    tmpl: *const TemplateFile,
-    project_name: []const u8,
-) !void {
-    printInfo("  Fetching {s}...", .{tmpl.source});
-
-    // Build the full URL.
-    const url = try std.mem.concat(allocator, u8, &.{ TEMPLATE_BASE_URL, tmpl.source });
-    defer allocator.free(url);
-
-    // Set up an allocating writer to collect the response body.
-    var body_writer: std.Io.Writer.Allocating = .init(allocator);
-    defer body_writer.deinit();
-
-    const result = client.fetch(.{
-        .location = .{ .url = url },
-        .response_writer = &body_writer.writer,
-    }) catch |err| {
-        printError("failed to fetch {s}: {s}", .{ url, @errorName(err) });
-        std.process.exit(1);
-    };
-
-    if (result.status != .ok) {
-        printError("HTTP {d} when fetching {s}", .{ @intFromEnum(result.status), url });
-        std.process.exit(1);
-    }
-
-    const response_body = body_writer.written();
-
-    // Perform {{PROJECT_NAME}} placeholder substitution.
-    const content = try substitutePlaceholder(allocator, response_body, project_name);
-    defer allocator.free(content);
-
-    // Create parent directories (e.g. "scripts/", "web/").
-    if (std.fs.path.dirname(tmpl.dest)) |parent| {
-        dir.makePath(parent) catch |err| {
-            printError("failed to create directory '{s}': {s}", .{ parent, @errorName(err) });
-            std.process.exit(1);
-        };
-    }
-
-    // Write the file.
-    var file = dir.createFile(tmpl.dest, .{}) catch |err| {
-        printError("failed to create file '{s}': {s}", .{ tmpl.dest, @errorName(err) });
-        std.process.exit(1);
-    };
-    defer file.close();
-
-    file.writeAll(content) catch |err| {
-        printError("failed to write file '{s}': {s}", .{ tmpl.dest, @errorName(err) });
-        std.process.exit(1);
-    };
-
-    // Set executable permission for scripts.
-    if (tmpl.executable) {
-        file.setPermissions(.{ .inner = .{ .mode = 0o755 } }) catch |err| {
-            printError("failed to set executable permission on '{s}': {s}", .{ tmpl.dest, @errorName(err) });
-            std.process.exit(1);
-        };
-    }
+/// Remove the temporary clone directory. Best-effort — failures are ignored
+/// since leaving a temp dir is harmless.
+fn cleanupTmpDir(path: []const u8) void {
+    std.fs.deleteTreeAbsolute(path) catch {};
 }
 
 /// Replace all occurrences of "{{PROJECT_NAME}}" with the actual project name.
@@ -732,7 +703,7 @@ fn writeBuildZigZon(allocator: std.mem.Allocator, dir: std.fs.Dir, project_name:
         try buf.print(allocator, "            .path = \"{s}\",\n", .{rel_path});
     } else {
         try buf.appendSlice(allocator,
-            \\            .url = "https://github.com/ttrei-org/zig-webgpu-platform/archive/master.tar.gz",
+            \\            .url = "git+https://github.com/ttrei-org/zig-webgpu-platform.git#master",
             \\            .hash = "placeholder_run_zig_fetch_save",
             \\
         );
@@ -952,11 +923,11 @@ fn initGitRepo(allocator: std.mem.Allocator, project_name: []const u8, target_pa
     if (platform_path == null) {
         printInfo("Fetching zig-webgpu-platform dependency (this may take a moment)...", .{});
         const zig_ok = runCommand(allocator, target_path, &.{
-            "zig",                                                                    "fetch", "--save",
-            "https://github.com/ttrei-org/zig-webgpu-platform/archive/master.tar.gz",
+            "zig",                                                             "fetch", "--save",
+            "git+https://github.com/ttrei-org/zig-webgpu-platform.git#master",
         });
         if (!zig_ok) {
-            printError("'zig fetch --save' failed. Ensure zig is installed and network is available.", .{});
+            printError("'zig fetch --save' failed. Ensure zig is installed and you have access to the repository.", .{});
             std.process.exit(1);
         }
     } else {
