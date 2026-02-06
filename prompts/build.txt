@@ -11,6 +11,12 @@ Compare screenshots of both native and web (see AGENTS.md on how to use playwrig
 
 6. Commit your changes after closing a bead.
 
+7. IMPORTANT: The create-app scaffolding tool generates projects that depend on specific platform exports (library module name, web/ file paths, dependency names, linking patterns). If your changes touch any of these — the library module export in build.zig, web/wasm_bindings.js, web/index.html, dependency names in build.zig.zon, or the Dawn/GLFW/zgpu linking pattern — you MUST re-test the create-app tool before committing:
+   zig build                                    (in create-app/ directory)
+   create-app/zig-out/bin/zig-webgpu-create-app --templates-dir=create-app/templates --platform-path=. /tmp/test-scaffold-project
+   zig build                                    (in /tmp/test-scaffold-project)
+   zig build -Dtarget=wasm32-emscripten          (in /tmp/test-scaffold-project)
+
 9. When you learn something new about how to use/run the application/tests/other, make sure you update @AGENT.md using a subagent but keep it brief. For example if you run commands multiple times before learning the correct command then that file should be updated.
 
 99. Important! If you discover a bug, either fix it using a subagent if it is required by the task at hand, or create a new bead using a subagent (or multiple if the required fix is large and can be broken down in logical steps).

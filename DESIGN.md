@@ -381,7 +381,51 @@ The `zig-webgpu-create-app` CLI creates a ready-to-build project directory with 
 
 **Fingerprint auto-resolution:** After generating `build.zig.zon` with a placeholder fingerprint (`0x0000000000000000`), the tool runs `zig build`, captures the compiler's fingerprint suggestion from stderr, and patches `build.zig.zon` with the correct value. This avoids requiring the user to manually fix the fingerprint.
 
+**Template location:** `create-app/templates/` contains all template files: `AGENTS.md`, `DESIGN.md`, `serve.py`, `scripts/web_screenshot.sh`, `index.html`, `playwright-cli.json`, `gitignore`. These are either fetched from GitHub at runtime or copied from a local directory when `--templates-dir` is used.
+
 **Template `index.html`:** The generated HTML passes `bin/{{PROJECT_NAME}}.wasm` to the JS `init()` function so the browser fetches the correct WASM binary from Zig's output structure.
+
+### 7.1 Generated build.zig Contract
+
+The generated project's `build.zig` depends on specific platform exports. These constitute an implicit compatibility contract — changing any of them will break scaffolded projects:
+
+| Export | Where Used | Description |
+|---|---|---|
+| Library module `"zig-webgpu-platform"` | `platform_dep.module("zig-webgpu-platform")` | The named module from `build.zig`'s `addModule()` call |
+| `web/wasm_bindings.js` | `platform_dep.path("web/wasm_bindings.js")` | JS WebGPU bridge, copied as `<project>.js` in WASM builds |
+| `web/index.html` | `b.path("web/index.html")` | HTML host page (from local template, not platform dep) |
+| `linkNativeDeps()` | `platform_build.linkNativeDeps(platform_dep, exe)` | Public build helper for native linking |
+| Transitive deps: zgpu, zglfw | Resolved through `platform_dep.builder` | Consumer does NOT declare these |
+| Dawn prebuilts, system_sdk | Resolved via `platform_b.lazyDependency(...)` | Lazy deps in platform's `build.zig.zon` |
+| Dawn C sources: `dawn.cpp`, `dawn_proc.c` | Compiled into consumer's executable | From zgpu's `src/` directory |
+| GLFW artifact | `zglfw_dep.artifact("glfw")` | Linked into consumer's executable |
+| WASM settings | `export_memory`, `export_table`, `initial_memory`, `import_symbols` | Hardcoded in generated `build.zig` |
+
+### 7.2 Compatibility Invariant
+
+Changes to any of the above exports (module name, file paths, dependency names, linking API) will break scaffolded projects. The create-app tool and its generated output **must be re-tested** whenever platform changes touch these areas:
+
+1. The library module name `"zig-webgpu-platform"` in `build.zig`
+2. The `web/wasm_bindings.js` file path
+3. The `linkNativeDeps()` function signature or behavior
+4. Dependency names in `build.zig.zon` (zgpu, zglfw, zigimg, Dawn prebuilts, system_sdk)
+5. The Dawn/GLFW/zgpu linking pattern (library paths, C sources, system libraries)
+
+Re-testing procedure:
+```bash
+# Build the create-app tool
+zig build   # in create-app/ directory
+
+# Scaffold with local templates and path dependency
+create-app/zig-out/bin/zig-webgpu-create-app \
+  --templates-dir=create-app/templates \
+  --platform-path=/path/to/zig-webgpu-platform \
+  /tmp/test-scaffold-project
+
+# Verify the scaffolded project builds
+zig build                                 # in /tmp/test-scaffold-project
+zig build -Dtarget=wasm32-emscripten      # in /tmp/test-scaffold-project
+```
 
 ---
 
