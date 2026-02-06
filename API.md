@@ -15,8 +15,8 @@ Add to your `build.zig.zon`:
 ```zig
 .dependencies = .{
     .zig_webgpu_platform = .{
-        .url = "https://github.com/user/zig-webgpu-platform/archive/main.tar.gz",
-        .hash = "...", // Use `zig fetch` to get the hash
+        .url = "git+https://github.com/ttrei-org/zig-webgpu-platform.git#master",
+        .hash = "...", // Use `zig fetch --save <url>` to compute the hash
     },
 }
 ```

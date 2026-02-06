@@ -381,7 +381,9 @@ The `zig-webgpu-create-app` CLI creates a ready-to-build project directory with 
 
 **Fingerprint auto-resolution:** After generating `build.zig.zon` with a placeholder fingerprint (`0x0000000000000000`), the tool runs `zig build`, captures the compiler's fingerprint suggestion from stderr, and patches `build.zig.zon` with the correct value. This avoids requiring the user to manually fix the fingerprint.
 
-**Template location:** `create-app/templates/` contains all template files: `AGENTS.md`, `DESIGN.md`, `serve.py`, `scripts/web_screenshot.sh`, `index.html`, `playwright-cli.json`, `gitignore`. These are either fetched from GitHub at runtime or copied from a local directory when `--templates-dir` is used.
+**Template location:** `create-app/templates/` contains all template files: `AGENTS.md`, `DESIGN.md`, `serve.py`, `scripts/web_screenshot.sh`, `index.html`, `playwright-cli.json`, `gitignore`. When `--templates-dir` is not specified, the tool clones the repository via `git clone --depth=1 --sparse` (using SSH) and copies templates from the clone. With `--templates-dir`, files are copied from the local directory directly.
+
+**Dependency URL:** The generated `build.zig.zon` uses a `git+https://` URL for the zig-webgpu-platform dependency. When `--platform-path` is specified, a relative path dependency is used instead.
 
 **Template `index.html`:** The generated HTML passes `bin/{{PROJECT_NAME}}.wasm` to the JS `init()` function so the browser fetches the correct WASM binary from Zig's output structure.
 
@@ -451,7 +453,7 @@ zig build -Dtarget=wasm32-emscripten      # in /tmp/test-scaffold-project
 | `build.zig` | ~330 | Build configuration + module export + `linkNativeDeps()` public helper | Build |
 | `create-app/build.zig` | ~40 | Build config for create-app CLI tool (exe + tests) | Tooling |
 | `create-app/build.zig.zon` | ~15 | Package manifest for create-app (no deps) | Tooling |
-| `create-app/src/main.zig` | ~810 | Scaffolding tool: CLI parsing, validation, code gen, template fetching (HTTP or local), fingerprint resolution, git init | Tooling |
+| `create-app/src/main.zig` | ~1090 | Scaffolding tool: CLI parsing, validation, code gen, template fetching (git clone or local), fingerprint resolution, git init | Tooling |
 | `create-app/templates/` | — | Template files fetched at runtime during project scaffolding | Tooling |
 | `create-app/templates/AGENTS.md` | ~170 | Template AGENTS.md for scaffolded projects | Tooling |
 | `create-app/templates/DESIGN.md` | ~100 | Template DESIGN.md skeleton for scaffolded projects | Tooling |
